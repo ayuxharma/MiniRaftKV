@@ -1,0 +1,21 @@
+# CMake build output
+build/
+out/
+
+# macOS metadata
+.DS_Store
+
+# Editors and IDEs
+.vscode/
+.idea/
+
+# Generated files
+compile_commands.json
+
+# Runtime data
+data/
+logs/
+
+# Temporary files
+*.tmp
+*.swp
