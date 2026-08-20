@@ -762,13 +762,15 @@ void test_future_log_term_is_rejected() {
 }
 
 void test_initial_election_deadline() {
-    RaftCore node{
-        "node-1",
-        three_node_cluster(),
-        0,
-        {},
-        150
-    };
+RaftCore node{
+    "node-1",
+    three_node_cluster(),
+    0,
+    {},
+    150,
+    150,
+    1
+};
 
     expect(
         node.current_time_ms() == 0,
@@ -792,14 +794,15 @@ void test_initial_election_deadline() {
 }
 
 void test_election_timeout_expires_at_deadline() {
-    RaftCore node{
-        "node-1",
-        three_node_cluster(),
-        0,
-        {},
-        150
-    };
-
+RaftCore node{
+    "node-1",
+    three_node_cluster(),
+    0,
+    {},
+    150,
+    150,
+    1
+};
     // Move to one millisecond before the deadline.
     node.advance_time(149);
 
@@ -828,14 +831,15 @@ void test_election_timeout_expires_at_deadline() {
 }
 
 void test_starting_election_resets_deadline() {
-    RaftCore node{
-        "node-1",
-        three_node_cluster(),
-        0,
-        {},
-        150
-    };
-
+RaftCore node{
+    "node-1",
+    three_node_cluster(),
+    0,
+    {},
+    150,
+    150,
+    1
+};
     // Reach the original timeout.
     node.advance_time(150);
 
@@ -906,12 +910,14 @@ void test_zero_election_timeout_is_rejected() {
 
     try {
         const RaftCore node{
-            "node-1",
-            three_node_cluster(),
-            0,
-            {},
-            0
-        };
+    "node-1",
+    three_node_cluster(),
+    0,
+    {},
+    0,
+    0,
+    1
+};
 
         static_cast<void>(node);
     } catch (const invalid_argument&) {
@@ -921,6 +927,192 @@ void test_zero_election_timeout_is_rejected() {
     expect(
         exception_was_thrown,
         "Zero election timeout is rejected"
+    );
+}
+
+void test_timeout_is_selected_inside_range() {
+    RaftCore node{
+        "node-1",
+        three_node_cluster(),
+        0,
+        {},
+        150,
+        300,
+        42
+    };
+
+    expect(
+        node.min_election_timeout_ms() == 150,
+        "Node stores the minimum election timeout"
+    );
+
+    expect(
+        node.max_election_timeout_ms() == 300,
+        "Node stores the maximum election timeout"
+    );
+
+    expect(
+        node.election_timeout_ms() >= 150,
+        "Selected timeout is not below the minimum"
+    );
+
+    expect(
+        node.election_timeout_ms() <= 300,
+        "Selected timeout is not above the maximum"
+    );
+
+    expect(
+        node.election_deadline_ms() ==
+            node.election_timeout_ms(),
+        "Initial deadline equals the selected timeout"
+    );
+}
+
+void test_same_seed_produces_same_timeout() {
+    RaftCore first_node{
+        "node-1",
+        three_node_cluster(),
+        0,
+        {},
+        150,
+        300,
+        12345
+    };
+
+    RaftCore second_node{
+        "node-1",
+        three_node_cluster(),
+        0,
+        {},
+        150,
+        300,
+        12345
+    };
+
+    expect(
+        first_node.election_timeout_ms() ==
+            second_node.election_timeout_ms(),
+        "Same random seed produces repeatable timeout selection"
+    );
+}
+
+void test_new_election_selects_valid_timeout() {
+    RaftCore node{
+        "node-1",
+        three_node_cluster(),
+        0,
+        {},
+        150,
+        300,
+        42
+    };
+
+    // Advance to the currently selected deadline.
+    node.advance_time(
+        node.election_timeout_ms()
+    );
+
+    expect(
+        node.election_timeout_expired(),
+        "Initial randomized timeout expires"
+    );
+
+    // Starting an election selects another timeout from the range.
+    node.start_election();
+
+    expect(
+        node.election_timeout_ms() >= 150,
+        "New timeout is not below the minimum"
+    );
+
+    expect(
+        node.election_timeout_ms() <= 300,
+        "New timeout is not above the maximum"
+    );
+
+    expect(
+        node.election_deadline_ms() ==
+            node.current_time_ms() +
+            node.election_timeout_ms(),
+        "New deadline is relative to current logical time"
+    );
+
+    expect(
+        !node.election_timeout_expired(),
+        "Fresh randomized election timeout is not expired"
+    );
+}
+
+void test_invalid_timeout_range_is_rejected() {
+    bool exception_was_thrown = false;
+
+    try {
+        const RaftCore node{
+            "node-1",
+            three_node_cluster(),
+            0,
+            {},
+            300,
+            150,
+            1
+        };
+
+        static_cast<void>(node);
+    } catch (const invalid_argument&) {
+        exception_was_thrown = true;
+    }
+
+    expect(
+        exception_was_thrown,
+        "Timeout range with maximum below minimum is rejected"
+    );
+}
+
+void test_nodes_can_use_different_timeouts() {
+    // Fixed ranges make this test completely deterministic.
+    RaftCore first_node{
+        "node-1",
+        three_node_cluster(),
+        0,
+        {},
+        170,
+        170,
+        1
+    };
+
+    RaftCore second_node{
+        "node-2",
+        three_node_cluster(),
+        0,
+        {},
+        225,
+        225,
+        2
+    };
+
+    RaftCore third_node{
+        "node-3",
+        three_node_cluster(),
+        0,
+        {},
+        280,
+        280,
+        3
+    };
+
+    expect(
+        first_node.election_deadline_ms() == 170,
+        "First node has the earliest deadline"
+    );
+
+    expect(
+        second_node.election_deadline_ms() == 225,
+        "Second node has the middle deadline"
+    );
+
+    expect(
+        third_node.election_deadline_ms() == 280,
+        "Third node has the latest deadline"
     );
 }
 
@@ -963,6 +1155,13 @@ int main() {
     test_starting_election_resets_deadline();
     test_leader_does_not_expire_election_timeout();
     test_zero_election_timeout_is_rejected();
+
+    // Randomized election-timeout tests.
+test_timeout_is_selected_inside_range();
+test_same_seed_produces_same_timeout();
+test_new_election_selects_valid_timeout();
+test_invalid_timeout_range_is_rejected();
+test_nodes_can_use_different_timeouts();
 
     if (failure_count == 0) {
         cout << "\nAll Raft core tests passed.\n";

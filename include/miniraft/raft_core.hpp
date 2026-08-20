@@ -8,6 +8,7 @@
 #include <string_view>
 #include <unordered_set>
 #include <vector>
+#include <random>
 
 namespace miniraft {
 
@@ -18,6 +19,7 @@ using std::string_view;
 using std::uint64_t;
 using std::unordered_set;
 using std::vector;
+using std::mt19937_64;
 
 // Create a readable alias for values that may be empty.
 template <typename ValueType>
@@ -84,7 +86,9 @@ public:
         vector<string> cluster_members,
         uint64_t initial_term = 0,
         vector<LogEntry> initial_log = {},
-        uint64_t election_timeout_ms = 150
+        uint64_t min_election_timeout_ms = 150,
+        uint64_t max_election_timeout_ms = 300,
+        uint64_t random_seed = 1
     );
 
     // Read-only accessors for the node's current state.
@@ -113,10 +117,15 @@ public:
     // An empty log has last term zero.
     [[nodiscard]] uint64_t last_log_term() const;
 
+    [[nodiscard]] uint64_t min_election_timeout_ms() const;
+    [[nodiscard]] uint64_t max_election_timeout_ms() const;
+
     [[nodiscard]] uint64_t current_time_ms() const;
     [[nodiscard]] uint64_t election_timeout_ms() const;
     [[nodiscard]] uint64_t election_deadline_ms() const;
     [[nodiscard]] bool election_timeout_expired() const;
+
+
     void advance_time(uint64_t elapsed_ms);
 
     // Start a new election.
@@ -174,9 +183,25 @@ private:
     // Unique votes collected while acting as a candidate.
     unordered_set<string> votes_received_;
 
+    // Current deterministic logical time.
     uint64_t current_time_ms_{0};
-    uint64_t election_timeout_ms_{150};
-    uint64_t election_deadline_ms_{150};
+
+    // Lower boundary for randomized election timeouts.
+    uint64_t min_election_timeout_ms_{150};
+
+    // Upper boundary for randomized election timeouts.
+    uint64_t max_election_timeout_ms_{300};
+
+    // Timeout selected for the current election-timer interval.
+    uint64_t election_timeout_ms_{0};
+
+    // Logical time when the current timer expires.
+    uint64_t election_deadline_ms_{0};
+
+    // Deterministic random-number engine.
+    //
+    // Tests receive repeatable values when they use the same seed.
+    mt19937_64 random_engine_;
 };
 
 }  // namespace miniraft
