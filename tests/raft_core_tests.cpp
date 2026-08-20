@@ -761,6 +761,169 @@ void test_future_log_term_is_rejected() {
     );
 }
 
+void test_initial_election_deadline() {
+    RaftCore node{
+        "node-1",
+        three_node_cluster(),
+        0,
+        {},
+        150
+    };
+
+    expect(
+        node.current_time_ms() == 0,
+        "A new node begins at logical time zero"
+    );
+
+    expect(
+        node.election_timeout_ms() == 150,
+        "Node stores the configured election timeout"
+    );
+
+    expect(
+        node.election_deadline_ms() == 150,
+        "Initial deadline equals the configured timeout"
+    );
+
+    expect(
+        !node.election_timeout_expired(),
+        "Election timeout is initially inactive"
+    );
+}
+
+void test_election_timeout_expires_at_deadline() {
+    RaftCore node{
+        "node-1",
+        three_node_cluster(),
+        0,
+        {},
+        150
+    };
+
+    // Move to one millisecond before the deadline.
+    node.advance_time(149);
+
+    expect(
+        node.current_time_ms() == 149,
+        "Logical time advances by the requested duration"
+    );
+
+    expect(
+        !node.election_timeout_expired(),
+        "Timeout does not expire before its deadline"
+    );
+
+    // Reach the exact deadline.
+    node.advance_time(1);
+
+    expect(
+        node.current_time_ms() == 150,
+        "Logical time reaches the election deadline"
+    );
+
+    expect(
+        node.election_timeout_expired(),
+        "Timeout expires exactly at its deadline"
+    );
+}
+
+void test_starting_election_resets_deadline() {
+    RaftCore node{
+        "node-1",
+        three_node_cluster(),
+        0,
+        {},
+        150
+    };
+
+    // Reach the original timeout.
+    node.advance_time(150);
+
+    expect(
+        node.election_timeout_expired(),
+        "Original election timeout expires"
+    );
+
+    // Starting the election creates a new deadline.
+    node.start_election();
+
+    expect(
+        node.role() == NodeRole::candidate,
+        "Timed-out follower can become a candidate"
+    );
+
+    expect(
+        node.election_deadline_ms() == 300,
+        "Starting election creates a fresh deadline"
+    );
+
+    expect(
+        !node.election_timeout_expired(),
+        "New election timeout has not expired immediately"
+    );
+
+    // Move to the candidate's next deadline.
+    node.advance_time(150);
+
+    expect(
+        node.election_timeout_expired(),
+        "Candidate may time out if it cannot win the election"
+    );
+}
+
+void test_leader_does_not_expire_election_timeout() {
+    // A one-node cluster becomes leader using only its self-vote.
+    const vector<string> one_node_cluster{
+        "node-1"
+    };
+
+    RaftCore node{
+        "node-1",
+        one_node_cluster,
+        0,
+        {},
+        150
+    };
+
+    node.start_election();
+
+    expect(
+        node.role() == NodeRole::leader,
+        "One-node candidate immediately becomes leader"
+    );
+
+    // Advance far beyond the old election deadline.
+    node.advance_time(1000);
+
+    expect(
+        !node.election_timeout_expired(),
+        "Leader does not expire an election timeout"
+    );
+}
+
+void test_zero_election_timeout_is_rejected() {
+    bool exception_was_thrown = false;
+
+    try {
+        const RaftCore node{
+            "node-1",
+            three_node_cluster(),
+            0,
+            {},
+            0
+        };
+
+        static_cast<void>(node);
+    } catch (const invalid_argument&) {
+        exception_was_thrown = true;
+    }
+
+    expect(
+        exception_was_thrown,
+        "Zero election timeout is rejected"
+    );
+}
+
 }  // namespace
 
 int main() {
@@ -793,6 +956,13 @@ int main() {
     test_zero_term_log_entry_is_rejected();
     test_decreasing_log_terms_are_rejected();
     test_future_log_term_is_rejected();
+
+    // Deterministic election-timer tests.
+    test_initial_election_deadline();
+    test_election_timeout_expires_at_deadline();
+    test_starting_election_resets_deadline();
+    test_leader_does_not_expire_election_timeout();
+    test_zero_election_timeout_is_rejected();
 
     if (failure_count == 0) {
         cout << "\nAll Raft core tests passed.\n";

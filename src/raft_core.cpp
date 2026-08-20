@@ -37,20 +37,26 @@ RaftCore::RaftCore(
     string node_id,
     vector<string> cluster_members,
     const uint64_t initial_term,
-    vector<LogEntry> initial_log
+    vector<LogEntry> initial_log,
+    const uint64_t election_timeout_ms
 )
-    // Move large values into the object instead of copying them.
-    //
-    // Members are initialized in the order in which they are
-    // declared in raft_core.hpp.
     : node_id_{move(node_id)},
       log_entries_{move(initial_log)},
-      current_term_{initial_term} {
+      current_term_{initial_term},
+      election_timeout_ms_{election_timeout_ms},
+      election_deadline_ms_{election_timeout_ms} {
 
     // A node must always have a non-empty identity.
     if (node_id_.empty()) {
         throw invalid_argument{
             "Node ID cannot be empty"
+        };
+    }
+
+    // A zero timeout would expire immediately forever.
+    if (election_timeout_ms_ == 0) {
+        throw invalid_argument{
+            "Election timeout must be greater than zero"
         };
     }
 
@@ -218,6 +224,47 @@ uint64_t RaftCore::last_log_term() const {
     return log_entries_.back().term;
 }
 
+uint64_t RaftCore::current_time_ms() const {
+    // Return the current deterministic logical time.
+    return current_time_ms_;
+}
+
+uint64_t RaftCore::election_timeout_ms() const {
+    // Return how long this node waits before timing out.
+    return election_timeout_ms_;
+}
+
+uint64_t RaftCore::election_deadline_ms() const {
+    // Return the exact logical time at which timeout occurs.
+    return election_deadline_ms_;
+}
+
+bool RaftCore::election_timeout_expired() const {
+    // A leader does not start another election while it remains leader.
+    if (role_ == NodeRole::leader) {
+        return false;
+    }
+
+    // The timeout expires when current time reaches or passes
+    // the configured deadline.
+    return current_time_ms_ >= election_deadline_ms_;
+}
+
+void RaftCore::advance_time(
+    const uint64_t elapsed_ms
+) {
+    // Advance deterministic time by the requested duration.
+    //
+    // No real sleeping happens here.
+    current_time_ms_ += elapsed_ms;
+}
+
+void RaftCore::reset_election_deadline() {
+    // Start a fresh timeout interval from the current logical time.
+    election_deadline_ms_ =
+        current_time_ms_ + election_timeout_ms_;
+}
+
 size_t RaftCore::majority_size() const {
     // A majority means more than half of the cluster.
     //
@@ -246,6 +293,8 @@ void RaftCore::start_election() {
 
     // Store the self-vote in the set of received votes.
     votes_received_.insert(node_id_);
+
+    reset_election_deadline();  // Give this election a fresh timeout interval.
 
     // A one-node cluster already has a majority after self-voting.
     if (votes_received() >= majority_size()) {

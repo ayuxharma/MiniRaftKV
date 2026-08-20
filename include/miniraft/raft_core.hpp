@@ -83,7 +83,8 @@ public:
         string node_id,
         vector<string> cluster_members,
         uint64_t initial_term = 0,
-        vector<LogEntry> initial_log = {}
+        vector<LogEntry> initial_log = {},
+        uint64_t election_timeout_ms = 150
     );
 
     // Read-only accessors for the node's current state.
@@ -112,6 +113,12 @@ public:
     // An empty log has last term zero.
     [[nodiscard]] uint64_t last_log_term() const;
 
+    [[nodiscard]] uint64_t current_time_ms() const;
+    [[nodiscard]] uint64_t election_timeout_ms() const;
+    [[nodiscard]] uint64_t election_deadline_ms() const;
+    [[nodiscard]] bool election_timeout_expired() const;
+    void advance_time(uint64_t elapsed_ms);
+
     // Start a new election.
     void start_election();
 
@@ -134,6 +141,7 @@ public:
 private:
     // Become a follower after discovering a newer term.
     void become_follower(uint64_t new_term);
+    void reset_election_deadline();
 
     // Calculate the number of votes required to win.
     [[nodiscard]] size_t majority_size() const;
@@ -165,6 +173,10 @@ private:
 
     // Unique votes collected while acting as a candidate.
     unordered_set<string> votes_received_;
+
+    uint64_t current_time_ms_{0};
+    uint64_t election_timeout_ms_{150};
+    uint64_t election_deadline_ms_{150};
 };
 
 }  // namespace miniraft
