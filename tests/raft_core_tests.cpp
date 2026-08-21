@@ -1359,6 +1359,310 @@ void test_large_tick_starts_only_one_election() {
     );
 }
 
+void test_granted_vote_resets_election_deadline() {
+    RaftCore follower{
+        "node-2",
+        three_node_cluster(),
+        0,
+        {},
+        100,
+        100,
+        1
+    };
+
+    // Move close to the original deadline of 100 ms.
+    follower.advance_time(90);
+
+    const RequestVoteRequest request{
+        1,
+        "node-1",
+        0,
+        0
+    };
+
+    const RequestVoteResponse response =
+        follower.handle_request_vote(request);
+
+    expect(
+        response.vote_granted,
+        "Follower grants the valid vote"
+    );
+
+    expect(
+        follower.current_time_ms() == 90,
+        "Granting a vote does not change logical time"
+    );
+
+    expect(
+        follower.election_deadline_ms() == 190,
+        "Granted vote creates a fresh election deadline"
+    );
+
+    expect(
+        !follower.election_timeout_expired(),
+        "Follower is not timed out after granting a vote"
+    );
+}
+
+void test_follower_waits_until_new_deadline() {
+    RaftCore follower{
+        "node-2",
+        three_node_cluster(),
+        0,
+        {},
+        100,
+        100,
+        1
+    };
+
+    follower.advance_time(90);
+
+    const RequestVoteRequest request{
+        1,
+        "node-1",
+        0,
+        0
+    };
+
+    static_cast<void>(
+        follower.handle_request_vote(request)
+    );
+
+    // Move past the original deadline of 100 ms,
+    // but remain before the new deadline of 190 ms.
+    const bool early_election =
+        follower.tick(99);
+
+    expect(
+        !early_election,
+        "Follower does not use its old election deadline"
+    );
+
+    expect(
+        follower.current_time_ms() == 189,
+        "Follower reaches one millisecond before new deadline"
+    );
+
+    expect(
+        follower.role() == NodeRole::follower,
+        "Follower continues waiting for the elected leader"
+    );
+
+    // Reach the new deadline.
+    const bool election_started =
+        follower.tick(1);
+
+    expect(
+        election_started,
+        "Follower starts election at its new deadline"
+    );
+
+    expect(
+        follower.role() == NodeRole::candidate,
+        "Follower becomes candidate after new timeout"
+    );
+
+    expect(
+        follower.current_term() == 2,
+        "New election advances from term one to term two"
+    );
+}
+
+void test_repeated_granted_vote_resets_deadline_again() {
+    RaftCore follower{
+        "node-2",
+        three_node_cluster(),
+        0,
+        {},
+        100,
+        100,
+        1
+    };
+
+    follower.advance_time(90);
+
+    const RequestVoteRequest request{
+        1,
+        "node-1",
+        0,
+        0
+    };
+
+    const RequestVoteResponse first_response =
+        follower.handle_request_vote(request);
+
+    expect(
+        first_response.vote_granted,
+        "Follower grants the first request"
+    );
+
+    expect(
+        follower.election_deadline_ms() == 190,
+        "First granted request resets the deadline"
+    );
+
+    // Simulate time passing before the candidate retries.
+    follower.advance_time(50);
+
+    const RequestVoteResponse repeated_response =
+        follower.handle_request_vote(request);
+
+    expect(
+        repeated_response.vote_granted,
+        "Follower grants repeated request from same candidate"
+    );
+
+    expect(
+        follower.current_time_ms() == 140,
+        "Logical time advanced before repeated request"
+    );
+
+    expect(
+        follower.election_deadline_ms() == 240,
+        "Repeated granted request resets the deadline again"
+    );
+}
+
+void test_stale_request_does_not_reset_deadline() {
+    RaftCore follower{
+        "node-2",
+        three_node_cluster(),
+        2,
+        {},
+        100,
+        100,
+        1
+    };
+
+    follower.advance_time(90);
+
+    const RequestVoteRequest stale_request{
+        1,
+        "node-1",
+        0,
+        0
+    };
+
+    const RequestVoteResponse response =
+        follower.handle_request_vote(stale_request);
+
+    expect(
+        !response.vote_granted,
+        "Follower rejects the stale vote request"
+    );
+
+    expect(
+        follower.election_deadline_ms() == 100,
+        "Stale request does not reset election deadline"
+    );
+
+    const bool election_started =
+        follower.tick(10);
+
+    expect(
+        election_started,
+        "Follower starts election at original deadline"
+    );
+
+    expect(
+        follower.current_term() == 3,
+        "Follower starts the new election in term three"
+    );
+}
+
+void test_outdated_log_does_not_reset_deadline() {
+    const vector<LogEntry> follower_log{
+        {1, "PUT x 10"},
+        {2, "PUT y 20"}
+    };
+
+    RaftCore follower{
+        "node-2",
+        three_node_cluster(),
+        2,
+        follower_log,
+        100,
+        100,
+        1
+    };
+
+    follower.advance_time(90);
+
+    // The request has a newer election term, but its log
+    // ends in the older term one.
+    const RequestVoteRequest request{
+        3,
+        "node-1",
+        10,
+        1
+    };
+
+    const RequestVoteResponse response =
+        follower.handle_request_vote(request);
+
+    expect(
+        !response.vote_granted,
+        "Follower rejects candidate with outdated log"
+    );
+
+    expect(
+        follower.current_term() == 3,
+        "Follower still adopts the newer request term"
+    );
+
+    expect(
+        follower.election_deadline_ms() == 100,
+        "Rejected outdated log does not reset deadline"
+    );
+
+    const bool election_started =
+        follower.tick(10);
+
+    expect(
+        election_started,
+        "Follower starts election using original deadline"
+    );
+
+    expect(
+        follower.current_term() == 4,
+        "Timed-out follower begins election in term four"
+    );
+}
+
+void test_unknown_candidate_does_not_reset_deadline() {
+    RaftCore follower{
+        "node-2",
+        three_node_cluster(),
+        0,
+        {},
+        100,
+        100,
+        1
+    };
+
+    follower.advance_time(90);
+
+    const RequestVoteRequest request{
+        1,
+        "node-99",
+        0,
+        0
+    };
+
+    const RequestVoteResponse response =
+        follower.handle_request_vote(request);
+
+    expect(
+        !response.vote_granted,
+        "Follower rejects unknown candidate"
+    );
+
+    expect(
+        follower.election_deadline_ms() == 100,
+        "Unknown candidate does not reset election deadline"
+    );
+}
+
 }  // namespace
 
 int main() {
@@ -1412,6 +1716,14 @@ test_tick_at_deadline_starts_election();
 test_candidate_timeout_starts_new_election();
 test_leader_does_not_start_another_election();
 test_large_tick_starts_only_one_election();
+
+// Vote-related election-timer reset behavior.
+test_granted_vote_resets_election_deadline();
+test_follower_waits_until_new_deadline();
+test_repeated_granted_vote_resets_deadline_again();
+test_stale_request_does_not_reset_deadline();
+test_outdated_log_does_not_reset_deadline();
+test_unknown_candidate_does_not_reset_deadline();
 
     if (failure_count == 0) {
         cout << "\nAll Raft core tests passed.\n";

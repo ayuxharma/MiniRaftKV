@@ -380,6 +380,7 @@ RaftCore::handle_request_vote(
 
     // All vote conditions passed.
     voted_for_ = request.candidate_id;
+    reset_election_deadline();
     response.vote_granted = true;
 
     return response;
