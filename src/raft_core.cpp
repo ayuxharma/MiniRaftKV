@@ -155,6 +155,10 @@ const Optional<string>& RaftCore::voted_for() const {
     return voted_for_;
 }
 
+const Optional<string>& RaftCore::leader_id() const {
+    return leader_id_;
+}
+
 size_t RaftCore::votes_received() const {
     return votes_received_.size();
 }
@@ -298,6 +302,8 @@ void RaftCore::start_election() {
 
     role_ = NodeRole::candidate;
 
+    leader_id_.reset() ;
+
     // Remove votes from the previous election.
     votes_received_.clear();
 
@@ -314,6 +320,8 @@ void RaftCore::start_election() {
     // A one-node cluster already has a majority.
     if (votes_received() >= majority_size()) {
         role_ = NodeRole::leader;
+
+        leader_id_ = node_id_ ;
 
         // No vote requests are needed after becoming leader.
         pending_request_vote_actions_.clear();
@@ -338,6 +346,25 @@ RaftCore::make_request_vote_request() const {
     return request;
 }
 
+AppendEntriesRequest
+RaftCore::make_heartbeat_request() const {
+    // Only the elected leader may send heartbeats.
+    if (role_ != NodeRole::leader) {
+        throw logic_error{
+            "Only a leader can create a heartbeat"
+        };
+    }
+
+    AppendEntriesRequest request;
+
+    request.term = current_term_;
+    request.leader_id = node_id_;
+    request.prev_log_index = last_log_index();
+    request.prev_log_term = last_log_term();
+
+    return request;
+}
+
 bool RaftCore::candidate_log_is_up_to_date(
     const uint64_t candidate_last_log_index,
     const uint64_t candidate_last_log_term
@@ -353,6 +380,32 @@ bool RaftCore::candidate_log_is_up_to_date(
 
     // When terms match, the candidate needs at least as many entries.
     return candidate_last_log_index >= last_log_index();
+}
+
+bool RaftCore::previous_log_position_matches(
+    const uint64_t previous_log_index,
+    const uint64_t previous_log_term
+) const {
+    // Index zero represents the position before the first entry.
+    //
+    // Because there is no real entry at index zero, its term must
+    // also be zero.
+    if (previous_log_index == 0) {
+        return previous_log_term == 0;
+    }
+
+    // The follower cannot match an index it does not have.
+    if (previous_log_index > last_log_index()) {
+        return false;
+    }
+
+    // Raft indexes start at one, while vector indexes start at zero.
+    const size_t vector_index =
+        static_cast<size_t>(previous_log_index - 1);
+
+    return
+        log_entries_[vector_index].term ==
+        previous_log_term;
 }
 
 RequestVoteResponse
@@ -418,6 +471,67 @@ RaftCore::handle_request_vote(
     return response;
 }
 
+AppendEntriesResponse
+RaftCore::handle_append_entries(
+    const AppendEntriesRequest& request
+) {
+    // Reject the heartbeat unless every required check succeeds.
+    AppendEntriesResponse response{
+        current_term_,
+        false
+    };
+
+    // Ignore messages claiming to come from an unknown node.
+    if (
+        cluster_members_.find(request.leader_id) ==
+        cluster_members_.end()
+    ) {
+        return response;
+    }
+
+    // A leader from an older term is no longer valid.
+    if (request.term < current_term_) {
+        return response;
+    }
+
+    // A newer term makes this node's current state outdated.
+    if (request.term > current_term_) {
+        become_follower(request.term);
+    } else if (role_ != NodeRole::follower) {
+        // A candidate or old leader must follow a recognized leader
+        // from the same term.
+        //
+        // Keep voted_for_ unchanged because the term did not change.
+        role_ = NodeRole::follower;
+        votes_received_.clear();
+        pending_request_vote_actions_.clear();
+    }
+
+    // The term may have changed after becoming a follower.
+    response.term = current_term_;
+
+    // Remember which node is acting as leader.
+    leader_id_ = request.leader_id;
+
+    // Receiving a valid current-term leader message prevents this
+    // follower from beginning an unnecessary election.
+    reset_election_deadline();
+
+    // The leader and follower must agree about the previous entry.
+    if (
+        !previous_log_position_matches(
+            request.prev_log_index,
+            request.prev_log_term
+        )
+    ) {
+        return response;
+    }
+
+    response.success = true;
+
+    return response;
+}
+
 void RaftCore::receive_vote(
     const string& voter_id,
     const RequestVoteResponse& response
@@ -458,6 +572,8 @@ void RaftCore::receive_vote(
     if (votes_received() >= majority_size()) {
         role_ = NodeRole::leader;
 
+        leader_id_ = node_id_ ;
+
         // Stop sending election requests after becoming leader.
         pending_request_vote_actions_.clear();
     }
@@ -477,6 +593,8 @@ void RaftCore::become_follower(
 
     // The node has not voted in the new term.
     voted_for_.reset();
+
+    leader_id_.reset() ;
 
     // Previous election state is no longer valid.
     votes_received_.clear();

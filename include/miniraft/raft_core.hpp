@@ -76,6 +76,25 @@ struct RequestVoteAction {
     RequestVoteRequest request;
 };
 
+struct AppendEntriesRequest {
+
+    uint64_t term {0} ; // leader's current term
+
+    string leader_id ; // node that believes it is the leader
+
+    uint64_t prev_log_index {0} ; // log position immediately before any new entries
+
+    uint64_t prev_log_term {0} ; // term stored at prev_log_index
+} ;
+
+struct AppendEntriesResponse
+{
+    uint64_t term {0} ; // responder's current term
+
+    bool success {false} ; // true when the leader's prev log position matches
+};
+
+
 class RaftCore {
 public:
     // Construct a node with static cluster membership.
@@ -94,6 +113,10 @@ public:
     [[nodiscard]] NodeRole role() const;
     [[nodiscard]] uint64_t current_term() const;
     [[nodiscard]] const Optional<string>& voted_for() const;
+
+    // Return the currently recognized leader, if one is known.
+    [[nodiscard]] const Optional<string>& leader_id() const;
+
     [[nodiscard]] size_t votes_received() const;
     [[nodiscard]] size_t cluster_size() const;
 
@@ -111,12 +134,10 @@ public:
     [[nodiscard]] uint64_t election_timeout_ms() const;
     [[nodiscard]] uint64_t election_deadline_ms() const;
     [[nodiscard]] bool election_timeout_expired() const;
+    [[nodiscard]] bool tick(uint64_t elapsed_ms); // // Advance logical time and start an election when timed out.
 
     // Advance logical time without automatically processing timeout.
     void advance_time(uint64_t elapsed_ms);
-
-    // Advance logical time and start an election when timed out.
-    [[nodiscard]] bool tick(uint64_t elapsed_ms);
 
     // Start an election immediately.
     void start_election();
@@ -135,6 +156,18 @@ public:
     void receive_vote(
         const string& voter_id,
         const RequestVoteResponse& response
+    );
+
+    // Create an empty AppendEntries request.
+    //
+    // An empty AppendEntries request acts as a heartbeat.
+    [[nodiscard]]
+    AppendEntriesRequest make_heartbeat_request() const;
+
+    // Process a heartbeat received from a leader.
+    [[nodiscard]]
+    AppendEntriesResponse handle_append_entries(
+        const AppendEntriesRequest& request
     );
 
     // Inspect the number of outbound vote requests.
@@ -165,6 +198,14 @@ private:
         uint64_t candidate_last_log_term
     ) const;
 
+    // Check whether the local log contains the requested
+    // previous index and term.
+    [[nodiscard]]
+    bool previous_log_position_matches(
+        uint64_t previous_log_index,
+        uint64_t previous_log_term
+    ) const;
+
     // Unique ID of this node.
     string node_id_;
 
@@ -182,6 +223,10 @@ private:
 
     // Candidate selected in the current term.
     Optional<string> voted_for_;
+
+    // Leader currently recognized by this node.
+    // It is empty when no valid leader is currently known.
+    Optional<string> leader_id_;
 
     // Unique votes collected during the current election.
     unordered_set<string> votes_received_;

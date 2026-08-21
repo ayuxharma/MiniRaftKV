@@ -6,6 +6,7 @@
 #include <vector>
 
 // MiniRaft types used by the tests.
+using miniraft::AppendEntriesRequest;
 using miniraft::LogEntry;
 using miniraft::NodeRole;
 using miniraft::RaftCore;
@@ -13,7 +14,9 @@ using miniraft::RequestVoteAction;
 using miniraft::RequestVoteRequest;
 using miniraft::RequestVoteResponse;
 
+
 // Standard-library names used by the tests.
+using std::logic_error;
 using std::cerr;
 using std::cout;
 using std::invalid_argument;
@@ -1499,6 +1502,359 @@ void test_stepping_down_clears_vote_requests() {
     expect(
         candidate.pending_request_vote_count() == 0,
         "Stepping down removes stale requests"
+    );
+}
+
+void test_only_leader_can_create_heartbeat() {
+    RaftCore follower{
+        "node-1",
+        three_node_cluster()
+    };
+
+    bool exception_was_thrown = false;
+
+    try {
+        static_cast<void>(
+            follower.make_heartbeat_request()
+        );
+    } catch (const logic_error&) {
+        exception_was_thrown = true;
+    }
+
+    expect(
+        exception_was_thrown,
+        "Follower cannot create a heartbeat"
+    );
+}
+
+void test_leader_creates_heartbeat() {
+    const vector<string> members{
+        "node-1"
+    };
+
+    RaftCore leader{
+        "node-1",
+        members,
+        2,
+        {
+            LogEntry{1, "PUT x 10"},
+            LogEntry{2, "PUT y 20"}
+        },
+        100,
+        100,
+        1
+    };
+
+    // A one-node candidate immediately becomes leader.
+    leader.start_election();
+
+    const AppendEntriesRequest heartbeat =
+        leader.make_heartbeat_request();
+
+    expect(
+        leader.role() == NodeRole::leader,
+        "One-node cluster creates a leader"
+    );
+
+    expect(
+        heartbeat.term == 3,
+        "Heartbeat contains the leader's current term"
+    );
+
+    expect(
+        heartbeat.leader_id == "node-1",
+        "Heartbeat contains the leader ID"
+    );
+
+    expect(
+        heartbeat.prev_log_index == 2,
+        "Heartbeat contains the leader's last log index"
+    );
+
+    expect(
+        heartbeat.prev_log_term == 2,
+        "Heartbeat contains the leader's last log term"
+    );
+
+    expect(
+        leader.leader_id().value_or("") == "node-1",
+        "Leader recognizes itself as the current leader"
+    );
+}
+
+void test_follower_accepts_valid_heartbeat() {
+    RaftCore follower{
+        "node-2",
+        three_node_cluster(),
+        0,
+        {},
+        100,
+        100,
+        1
+    };
+
+    const AppendEntriesRequest heartbeat{
+        1,
+        "node-1",
+        0,
+        0
+    };
+
+    const auto response =
+        follower.handle_append_entries(heartbeat);
+
+    expect(
+        response.success,
+        "Follower accepts a valid heartbeat"
+    );
+
+    expect(
+        response.term == 1,
+        "Heartbeat response contains the follower's term"
+    );
+
+    expect(
+        follower.current_term() == 1,
+        "Follower adopts the leader's newer term"
+    );
+
+    expect(
+        follower.role() == NodeRole::follower,
+        "Heartbeat receiver remains a follower"
+    );
+
+    expect(
+        follower.leader_id().value_or("") == "node-1",
+        "Follower records the recognized leader"
+    );
+}
+
+void test_valid_heartbeat_resets_election_timer() {
+    RaftCore follower{
+        "node-2",
+        three_node_cluster(),
+        0,
+        {},
+        100,
+        100,
+        1
+    };
+
+    // Move closer to the original deadline of 100 milliseconds.
+    follower.advance_time(60);
+
+    const AppendEntriesRequest heartbeat{
+        1,
+        "node-1",
+        0,
+        0
+    };
+
+    const auto response =
+        follower.handle_append_entries(heartbeat);
+
+    expect(
+        response.success,
+        "Heartbeat used for timer test is accepted"
+    );
+
+    expect(
+        follower.current_time_ms() == 60,
+        "Processing heartbeat does not advance logical time"
+    );
+
+    expect(
+        follower.election_deadline_ms() == 160,
+        "Valid heartbeat starts a fresh election timeout"
+    );
+
+    expect(
+        !follower.election_timeout_expired(),
+        "Follower does not start an election after heartbeat"
+    );
+}
+
+void test_stale_heartbeat_is_rejected() {
+    RaftCore follower{
+        "node-2",
+        three_node_cluster(),
+        2,
+        {},
+        100,
+        100,
+        1
+    };
+
+    follower.advance_time(60);
+
+    const uint64_t deadline_before_request =
+        follower.election_deadline_ms();
+
+    const AppendEntriesRequest stale_heartbeat{
+        1,
+        "node-1",
+        0,
+        0
+    };
+
+    const auto response =
+        follower.handle_append_entries(stale_heartbeat);
+
+    expect(
+        !response.success,
+        "Follower rejects a stale heartbeat"
+    );
+
+    expect(
+        response.term == 2,
+        "Stale heartbeat response returns the newer local term"
+    );
+
+    expect(
+        follower.current_term() == 2,
+        "Stale heartbeat does not change the follower term"
+    );
+
+    expect(
+        follower.election_deadline_ms() ==
+            deadline_before_request,
+        "Stale heartbeat does not reset the election timer"
+    );
+
+    expect(
+        !follower.leader_id().has_value(),
+        "Stale heartbeat does not establish a leader"
+    );
+}
+
+void test_candidate_steps_down_for_heartbeat() {
+    RaftCore candidate{
+        "node-1",
+        three_node_cluster(),
+        0,
+        {},
+        100,
+        100,
+        1
+    };
+
+    candidate.start_election();
+
+    expect(
+        candidate.role() == NodeRole::candidate,
+        "Node starts as candidate before heartbeat"
+    );
+
+    const AppendEntriesRequest heartbeat{
+        1,
+        "node-2",
+        0,
+        0
+    };
+
+    const auto response =
+        candidate.handle_append_entries(heartbeat);
+
+    expect(
+        response.success,
+        "Candidate accepts valid same-term heartbeat"
+    );
+
+    expect(
+        candidate.role() == NodeRole::follower,
+        "Candidate steps down after discovering a leader"
+    );
+
+    expect(
+        candidate.current_term() == 1,
+        "Same-term heartbeat does not increment the term"
+    );
+
+    expect(
+        candidate.voted_for().value_or("") == "node-1",
+        "Same-term step-down preserves the existing vote"
+    );
+
+    expect(
+        candidate.leader_id().value_or("") == "node-2",
+        "Former candidate records the current leader"
+    );
+
+    expect(
+        candidate.pending_request_vote_count() == 0,
+        "Stepping down clears pending vote requests"
+    );
+}
+
+void test_heartbeat_rejects_mismatched_log() {
+    RaftCore follower{
+        "node-2",
+        three_node_cluster(),
+        2,
+        {
+            LogEntry{1, "PUT x 10"},
+            LogEntry{2, "PUT y 20"}
+        },
+        100,
+        100,
+        1
+    };
+
+    const AppendEntriesRequest heartbeat{
+        2,
+        "node-1",
+        2,
+        1
+    };
+
+    const auto response =
+        follower.handle_append_entries(heartbeat);
+
+    expect(
+        !response.success,
+        "Heartbeat fails when previous log term does not match"
+    );
+
+    expect(
+        follower.leader_id().value_or("") == "node-1",
+        "Follower still recognizes the current leader"
+    );
+
+    expect(
+        follower.log_entries().size() == 2,
+        "Failed heartbeat does not change the follower log"
+    );
+}
+
+void test_unknown_heartbeat_sender_is_rejected() {
+    RaftCore follower{
+        "node-2",
+        three_node_cluster()
+    };
+
+    const AppendEntriesRequest heartbeat{
+        1,
+        "node-99",
+        0,
+        0
+    };
+
+    const auto response =
+        follower.handle_append_entries(heartbeat);
+
+    expect(
+        !response.success,
+        "Heartbeat from unknown node is rejected"
+    );
+
+    expect(
+        follower.current_term() == 0,
+        "Unknown sender cannot change the follower term"
+    );
+
+    expect(
+        !follower.leader_id().has_value(),
+        "Unknown sender is not recorded as leader"
     );
 }
 
