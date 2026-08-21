@@ -232,6 +232,17 @@ void RaftCore::advance_time(
     current_time_ms_ += elapsed_ms;
 }
 
+bool RaftCore::tick(
+    const uint64_t elapsed_ms
+) {
+    advance_time(elapsed_ms) ;
+
+    if (!election_timeout_expired()) return false ;
+
+    start_election() ;
+    return true ;
+}
+
 void RaftCore::reset_election_deadline() {
     // Select a timeout from the inclusive configured range.
     uniform_int_distribution<uint64_t> timeout_distribution{

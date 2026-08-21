@@ -1116,6 +1116,249 @@ void test_nodes_can_use_different_timeouts() {
     );
 }
 
+void test_tick_before_deadline_does_not_start_election() {
+    RaftCore node{
+        "node-1",
+        three_node_cluster(),
+        0,
+        {},
+        150,
+        150,
+        1
+    };
+
+    // Advance to one millisecond before the deadline.
+    const bool election_started =
+        node.tick(149);
+
+    expect(
+        !election_started,
+        "Tick before deadline does not start an election"
+    );
+
+    expect(
+        node.role() == NodeRole::follower,
+        "Node remains a follower before deadline"
+    );
+
+    expect(
+        node.current_term() == 0,
+        "Term does not change before deadline"
+    );
+
+    expect(
+        node.current_time_ms() == 149,
+        "Tick advances the logical clock"
+    );
+}
+
+void test_tick_at_deadline_starts_election() {
+    RaftCore node{
+        "node-1",
+        three_node_cluster(),
+        0,
+        {},
+        150,
+        150,
+        1
+    };
+
+    // Reach the exact election deadline.
+    const bool election_started =
+        node.tick(150);
+
+    expect(
+        election_started,
+        "Tick at deadline starts an election"
+    );
+
+    expect(
+        node.role() == NodeRole::candidate,
+        "Timed-out follower becomes a candidate"
+    );
+
+    expect(
+        node.current_term() == 1,
+        "Automatic election increments the term"
+    );
+
+    expect(
+        node.voted_for().value_or("") == "node-1",
+        "Automatic candidate votes for itself"
+    );
+
+    expect(
+        node.votes_received() == 1,
+        "Automatic candidate begins with one vote"
+    );
+
+    expect(
+        node.election_deadline_ms() == 300,
+        "Automatic election creates a fresh deadline"
+    );
+}
+
+void test_candidate_timeout_starts_new_election() {
+    RaftCore node{
+        "node-1",
+        three_node_cluster(),
+        0,
+        {},
+        100,
+        100,
+        1
+    };
+
+    // First timeout starts the term-one election.
+    const bool first_election_started =
+        node.tick(100);
+
+    expect(
+        first_election_started,
+        "First timeout starts the first election"
+    );
+
+    expect(
+        node.current_term() == 1,
+        "First election uses term one"
+    );
+
+    // Move to one millisecond before the candidate's new deadline.
+    const bool early_second_election =
+        node.tick(99);
+
+    expect(
+        !early_second_election,
+        "Candidate does not restart election before deadline"
+    );
+
+    expect(
+        node.current_term() == 1,
+        "Candidate remains in the same term before timeout"
+    );
+
+    // Reach the candidate's next deadline.
+    const bool second_election_started =
+        node.tick(1);
+
+    expect(
+        second_election_started,
+        "Candidate timeout starts another election"
+    );
+
+    expect(
+        node.role() == NodeRole::candidate,
+        "Node remains a candidate during the new election"
+    );
+
+    expect(
+        node.current_term() == 2,
+        "Second election uses a newer term"
+    );
+
+    expect(
+        node.votes_received() == 1,
+        "New election clears old votes and keeps only self-vote"
+    );
+
+    expect(
+        node.election_deadline_ms() == 300,
+        "Second election creates another fresh deadline"
+    );
+}
+
+void test_leader_does_not_start_another_election() {
+    const vector<string> one_node_cluster{
+        "node-1"
+    };
+
+    RaftCore node{
+        "node-1",
+        one_node_cluster,
+        0,
+        {},
+        100,
+        100,
+        1
+    };
+
+    // A one-node cluster becomes leader after its first timeout
+    // because its self-vote is already a majority.
+    const bool first_election_started =
+        node.tick(100);
+
+    expect(
+        first_election_started,
+        "One-node timeout starts an election"
+    );
+
+    expect(
+        node.role() == NodeRole::leader,
+        "One-node candidate immediately becomes leader"
+    );
+
+    expect(
+        node.current_term() == 1,
+        "Leader was elected in term one"
+    );
+
+    // Leaders do not start elections when time advances.
+    const bool another_election_started =
+        node.tick(1000);
+
+    expect(
+        !another_election_started,
+        "Leader does not start another election"
+    );
+
+    expect(
+        node.role() == NodeRole::leader,
+        "Node remains leader"
+    );
+
+    expect(
+        node.current_term() == 1,
+        "Leader's term does not change because of time"
+    );
+
+    expect(
+        node.current_time_ms() == 1100,
+        "Leader's logical clock still advances"
+    );
+}
+
+void test_large_tick_starts_only_one_election() {
+    RaftCore node{
+        "node-1",
+        three_node_cluster(),
+        0,
+        {},
+        100,
+        100,
+        1
+    };
+
+    // Even though 1000 ms covers several timeout intervals,
+    // one tick represents one processed timeout event.
+    const bool election_started =
+        node.tick(1000);
+
+    expect(
+        election_started,
+        "Large tick starts an election"
+    );
+
+    expect(
+        node.current_term() == 1,
+        "One tick starts only one new election term"
+    );
+
+    expect(
+        node.election_deadline_ms() == 1100,
+        "New deadline is relative to the advanced current time"
+    );
+}
+
 }  // namespace
 
 int main() {
@@ -1162,6 +1405,13 @@ test_same_seed_produces_same_timeout();
 test_new_election_selects_valid_timeout();
 test_invalid_timeout_range_is_rejected();
 test_nodes_can_use_different_timeouts();
+
+// Automatic election-timeout behavior.
+test_tick_before_deadline_does_not_start_election();
+test_tick_at_deadline_starts_election();
+test_candidate_timeout_starts_new_election();
+test_leader_does_not_start_another_election();
+test_large_tick_starts_only_one_election();
 
     if (failure_count == 0) {
         cout << "\nAll Raft core tests passed.\n";

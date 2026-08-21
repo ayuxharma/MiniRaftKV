@@ -125,8 +125,9 @@ public:
     [[nodiscard]] uint64_t election_deadline_ms() const;
     [[nodiscard]] bool election_timeout_expired() const;
 
-
     void advance_time(uint64_t elapsed_ms);
+
+    [[nodiscard]] bool tick(uint64_t elapsed_ms);
 
     // Start a new election.
     void start_election();
