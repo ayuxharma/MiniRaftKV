@@ -42,6 +42,7 @@ endfunction()
 # Build the consensus algorithm as a reusable library.
 add_library(miniraft_core
     src/raft_core.cpp
+    src/in_memory_cluster.cpp
 )
 
 # Allow users of the library to include files from include/miniraft.
@@ -88,6 +89,26 @@ enable_project_warnings(miniraft_core_tests)
 add_test(
     NAME miniraft_core_tests
     COMMAND miniraft_core_tests
+)
+
+# Build the in-memory cluster integration-test executable.
+add_executable(miniraft_cluster_tests
+    tests/in_memory_cluster_tests.cpp
+)
+
+# Connect the integration tests to the Raft library.
+target_link_libraries(miniraft_cluster_tests
+    PRIVATE
+        miniraft_core
+)
+
+# Apply the same compiler warnings to integration tests.
+enable_project_warnings(miniraft_cluster_tests)
+
+# Register the integration tests with CTest.
+add_test(
+    NAME miniraft_cluster_tests
+    COMMAND miniraft_cluster_tests
 )
 
 # Keep the original executable smoke test.
