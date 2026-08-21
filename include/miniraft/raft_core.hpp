@@ -72,6 +72,14 @@ struct RequestVoteResponse {
     bool vote_granted{false};
 };
 
+struct RequestVoteAction {
+    // Node that should receive the request.
+    string target_node_id;
+
+    // Request that should be delivered to the target node.
+    RequestVoteRequest request;
+};
+
 class RaftCore {
 public:
     // Create a Raft node.

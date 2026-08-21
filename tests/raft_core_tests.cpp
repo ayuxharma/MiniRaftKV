@@ -11,6 +11,7 @@ using miniraft::NodeRole;
 using miniraft::RaftCore;
 using miniraft::RequestVoteRequest;
 using miniraft::RequestVoteResponse;
+using miniraft::RequestVoteAction;
 
 // Import only the standard-library names used below.
 using std::cerr;
@@ -1663,6 +1664,259 @@ void test_unknown_candidate_does_not_reset_deadline() {
     );
 }
 
+void test_follower_has_no_vote_request_actions() {
+    RaftCore follower{
+        "node-1",
+        three_node_cluster(),
+        0,
+        {},
+        150,
+        150,
+        1
+    };
+
+    expect(
+        follower.pending_request_vote_count() == 0,
+        "Follower has no outbound vote requests"
+    );
+}
+
+void test_election_creates_request_for_each_peer() {
+    const vector<LogEntry> initial_log{
+        {1, "PUT x 10"},
+        {2, "PUT y 20"}
+    };
+
+    RaftCore candidate{
+        "node-1",
+        three_node_cluster(),
+        2,
+        initial_log,
+        150,
+        150,
+        1
+    };
+
+    candidate.start_election();
+
+    expect(
+        candidate.pending_request_vote_count() == 2,
+        "Three-node candidate creates two outbound requests"
+    );
+
+    const vector<RequestVoteAction> actions =
+        candidate.take_request_vote_actions();
+
+    bool found_node_2 = false;
+    bool found_node_3 = false;
+    bool found_self = false;
+    bool all_requests_are_correct = true;
+
+    for (const RequestVoteAction& action : actions) {
+        if (action.target_node_id == "node-2") {
+            found_node_2 = true;
+        }
+
+        if (action.target_node_id == "node-3") {
+            found_node_3 = true;
+        }
+
+        if (action.target_node_id == "node-1") {
+            found_self = true;
+        }
+
+        if (
+            action.request.term != 3 ||
+            action.request.candidate_id != "node-1" ||
+            action.request.last_log_index != 2 ||
+            action.request.last_log_term != 2
+        ) {
+            all_requests_are_correct = false;
+        }
+    }
+
+    expect(
+        actions.size() == 2,
+        "Exactly two actions are returned"
+    );
+
+    expect(
+        found_node_2,
+        "Candidate creates request for node-2"
+    );
+
+    expect(
+        found_node_3,
+        "Candidate creates request for node-3"
+    );
+
+    expect(
+        !found_self,
+        "Candidate does not create request for itself"
+    );
+
+    expect(
+        all_requests_are_correct,
+        "Every action contains the current election and log data"
+    );
+}
+
+void test_taking_actions_clears_queue() {
+    RaftCore candidate{
+        "node-1",
+        three_node_cluster(),
+        0,
+        {},
+        150,
+        150,
+        1
+    };
+
+    candidate.start_election();
+
+    expect(
+        candidate.pending_request_vote_count() == 2,
+        "Election initially queues two requests"
+    );
+
+    const vector<RequestVoteAction> first_take =
+        candidate.take_request_vote_actions();
+
+    expect(
+        first_take.size() == 2,
+        "First take returns the queued requests"
+    );
+
+    expect(
+        candidate.pending_request_vote_count() == 0,
+        "Taking requests clears the internal queue"
+    );
+
+    const vector<RequestVoteAction> second_take =
+        candidate.take_request_vote_actions();
+
+    expect(
+        second_take.empty(),
+        "Taking from an empty queue returns no actions"
+    );
+}
+
+void test_new_election_replaces_old_actions() {
+    RaftCore candidate{
+        "node-1",
+        three_node_cluster(),
+        0,
+        {},
+        100,
+        100,
+        1
+    };
+
+    // First election creates two term-one requests.
+    candidate.start_election();
+
+    expect(
+        candidate.pending_request_vote_count() == 2,
+        "First election creates two requests"
+    );
+
+    // Start another election without taking the old requests.
+    candidate.start_election();
+
+    expect(
+        candidate.current_term() == 2,
+        "Second election advances to term two"
+    );
+
+    expect(
+        candidate.pending_request_vote_count() == 2,
+        "New election replaces old requests instead of adding to them"
+    );
+
+    const vector<RequestVoteAction> actions =
+        candidate.take_request_vote_actions();
+
+    bool all_actions_use_term_two = true;
+
+    for (const RequestVoteAction& action : actions) {
+        if (action.request.term != 2) {
+            all_actions_use_term_two = false;
+        }
+    }
+
+    expect(
+        all_actions_use_term_two,
+        "All remaining requests belong to the new election term"
+    );
+}
+
+void test_one_node_cluster_creates_no_vote_requests() {
+    const vector<string> one_node_cluster{
+        "node-1"
+    };
+
+    RaftCore node{
+        "node-1",
+        one_node_cluster,
+        0,
+        {},
+        100,
+        100,
+        1
+    };
+
+    node.start_election();
+
+    expect(
+        node.role() == NodeRole::leader,
+        "One-node cluster elects itself as leader"
+    );
+
+    expect(
+        node.pending_request_vote_count() == 0,
+        "One-node leader creates no outbound vote requests"
+    );
+}
+
+void test_stepping_down_clears_vote_requests() {
+    RaftCore candidate{
+        "node-1",
+        three_node_cluster(),
+        0,
+        {},
+        100,
+        100,
+        1
+    };
+
+    candidate.start_election();
+
+    expect(
+        candidate.pending_request_vote_count() == 2,
+        "Candidate initially has two pending requests"
+    );
+
+    const RequestVoteResponse higher_term_response{
+        2,
+        false
+    };
+
+    candidate.receive_vote(
+        "node-2",
+        higher_term_response
+    );
+
+    expect(
+        candidate.role() == NodeRole::follower,
+        "Higher term makes candidate step down"
+    );
+
+    expect(
+        candidate.pending_request_vote_count() == 0,
+        "Stepping down removes stale vote requests"
+    );
+}
+
 }  // namespace
 
 int main() {
@@ -1724,6 +1978,14 @@ test_repeated_granted_vote_resets_deadline_again();
 test_stale_request_does_not_reset_deadline();
 test_outdated_log_does_not_reset_deadline();
 test_unknown_candidate_does_not_reset_deadline();
+
+// Outbound RequestVote action behavior.
+test_follower_has_no_vote_request_actions();
+test_election_creates_request_for_each_peer();
+test_taking_actions_clears_queue();
+test_new_election_replaces_old_actions();
+test_one_node_cluster_creates_no_vote_requests();
+test_stepping_down_clears_vote_requests();
 
     if (failure_count == 0) {
         cout << "\nAll Raft core tests passed.\n";

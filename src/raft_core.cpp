@@ -1,9 +1,7 @@
 #include "miniraft/raft_core.hpp"
 
-// Provides the random distribution used for election timeouts.
 #include <random>
 
-// Provides exceptions for invalid input and state.
 #include <stdexcept>
 
 // Provides move(), which avoids unnecessary copies.
@@ -11,7 +9,6 @@
 
 namespace miniraft {
 
-// Import only the standard-library names used in this file.
 using std::invalid_argument;
 using std::logic_error;
 using std::move;
@@ -177,6 +174,23 @@ size_t RaftCore::cluster_size() const {
     return cluster_members_.size();
 }
 
+size_t RaftCore::pending_request_vote_count() const {
+    // Return how many outbound vote requests are waiting.
+    return pending_request_vote_actions_.size();
+}
+
+vector<RequestVoteAction>
+RaftCore::take_request_vote_actions() {
+    // Move the actions into a local vector.
+    vector<RequestVoteAction> actions{
+        move(pending_request_vote_actions_)
+    };
+
+    pending_request_vote_actions_.clear();
+
+    return actions;
+}
+
 const vector<LogEntry>& RaftCore::log_entries() const {
     return log_entries_;
 }
@@ -264,25 +278,60 @@ size_t RaftCore::majority_size() const {
     return cluster_size() / 2 + 1;
 }
 
+void RaftCore::queue_request_vote_actions() {
+    // Remove any requests left from an older election.
+    //
+    // Requests from an older term must not be delivered as part
+    // of the new election.
+    pending_request_vote_actions_.clear();
+
+    // Create one snapshot of the current vote request.
+    const RequestVoteRequest request =
+        make_request_vote_request();
+
+    // Create one outbound action for every other cluster member.
+    for (const string& member_id : cluster_members_) {
+        // The candidate already voted for itself.
+        // It does not send a network request to itself.
+        if (member_id == node_id_) {
+            continue;
+        }
+
+        pending_request_vote_actions_.push_back(
+            RequestVoteAction{
+                member_id,
+                request
+            }
+        );
+    }
+}
+
 void RaftCore::start_election() {
     // Every new election starts in a new term.
     ++current_term_;
 
+    // The node becomes a candidate.
     role_ = NodeRole::candidate;
 
-    // Discard votes from any previous election.
+    // Discard votes from an older election.
     votes_received_.clear();
 
-    // A candidate votes for itself.
+    // The candidate votes for itself.
     voted_for_ = node_id_;
     votes_received_.insert(node_id_);
 
     // Select a fresh timeout for this election.
     reset_election_deadline();
 
-    // A one-node cluster immediately has a majority.
+    // Create outbound vote requests for every other node.
+    queue_request_vote_actions();
+
+    // A one-node cluster already has a majority.
     if (votes_received() >= majority_size()) {
         role_ = NodeRole::leader;
+
+        // A leader no longer needs election requests.
+        pending_request_vote_actions_.clear();
     }
 }
 
@@ -424,8 +473,11 @@ void RaftCore::receive_vote(
     votes_received_.insert(voter_id);
 
     if (votes_received() >= majority_size()) {
-        role_ = NodeRole::leader;
-    }
+    role_ = NodeRole::leader;
+
+    // Do not send additional election requests after becoming leader.
+    pending_request_vote_actions_.clear();
+}
 }
 
 void RaftCore::become_follower(
@@ -445,6 +497,8 @@ void RaftCore::become_follower(
 
     // Old election votes are no longer useful.
     votes_received_.clear();
+
+    pending_request_vote_actions_.clear();
 }
 
 }  // namespace miniraft
