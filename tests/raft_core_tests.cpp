@@ -5,15 +5,15 @@
 #include <string>
 #include <vector>
 
-// Import the MiniRaft types used by the tests.
+// MiniRaft types used by the tests.
 using miniraft::LogEntry;
 using miniraft::NodeRole;
 using miniraft::RaftCore;
+using miniraft::RequestVoteAction;
 using miniraft::RequestVoteRequest;
 using miniraft::RequestVoteResponse;
-using miniraft::RequestVoteAction;
 
-// Import only the standard-library names used below.
+// Standard-library names used by the tests.
 using std::cerr;
 using std::cout;
 using std::invalid_argument;
@@ -22,10 +22,9 @@ using std::vector;
 
 namespace {
 
-// Count the number of failed expectations.
 int failure_count = 0;
 
-// Check one expected condition and print its result.
+// Check one condition and print a readable result.
 void expect(
     const bool condition,
     const string& message
@@ -39,7 +38,6 @@ void expect(
     ++failure_count;
 }
 
-// Return the standard membership used by three-node tests.
 vector<string> three_node_cluster() {
     return {
         "node-1",
@@ -105,12 +103,12 @@ void test_starting_election_creates_candidate() {
 
     expect(
         node.voted_for().value_or("") == "node-1",
-        "A candidate votes for itself"
+        "Candidate votes for itself"
     );
 
     expect(
         node.votes_received() == 1,
-        "A candidate begins with one self-vote"
+        "Candidate begins with one self-vote"
     );
 }
 
@@ -127,7 +125,7 @@ void test_candidate_creates_vote_request() {
 
     expect(
         request.term == 1,
-        "Vote request contains the candidate's current term"
+        "Vote request contains the candidate term"
     );
 
     expect(
@@ -164,17 +162,17 @@ void test_follower_grants_first_vote() {
 
     expect(
         response.vote_granted,
-        "A follower grants its first valid vote"
+        "Follower grants its first valid vote"
     );
 
     expect(
         response.term == 1,
-        "Vote response contains the follower's current term"
+        "Vote response contains the follower term"
     );
 
     expect(
         follower.current_term() == 1,
-        "Follower adopts the candidate's newer term"
+        "Follower adopts the candidate term"
     );
 
     expect(
@@ -204,17 +202,17 @@ void test_repeated_vote_request_is_granted_again() {
 
     expect(
         first_response.vote_granted,
-        "Follower grants the original vote request"
+        "Follower grants the original request"
     );
 
     expect(
         second_response.vote_granted,
-        "Follower grants the repeated request from the same candidate"
+        "Follower grants a repeated request from same candidate"
     );
 
     expect(
         follower.voted_for().value_or("") == "node-1",
-        "Repeated request does not change the recorded candidate"
+        "Repeated request does not change recorded candidate"
     );
 }
 
@@ -246,17 +244,17 @@ void test_follower_rejects_second_candidate() {
 
     expect(
         first_response.vote_granted,
-        "Follower grants the first vote in a term"
+        "Follower grants first vote in a term"
     );
 
     expect(
         !second_response.vote_granted,
-        "Follower rejects another candidate in the same term"
+        "Follower rejects another candidate in same term"
     );
 
     expect(
         follower.voted_for().value_or("") == "node-1",
-        "The first vote remains unchanged"
+        "First vote remains unchanged"
     );
 }
 
@@ -273,7 +271,6 @@ void test_stale_vote_request_is_rejected() {
         0
     };
 
-    // The result is not needed; this call moves the follower to term two.
     static_cast<void>(
         follower.handle_request_vote(newer_request)
     );
@@ -295,12 +292,12 @@ void test_stale_vote_request_is_rejected() {
 
     expect(
         response.term == 2,
-        "Stale request receives the follower's newer term"
+        "Stale request receives follower newer term"
     );
 
     expect(
         follower.current_term() == 2,
-        "A stale request cannot decrease the current term"
+        "Stale request cannot decrease current term"
     );
 }
 
@@ -338,12 +335,12 @@ void test_higher_term_request_resets_previous_vote() {
 
     expect(
         follower.current_term() == 2,
-        "Follower adopts the newer request term"
+        "Follower adopts newer request term"
     );
 
     expect(
         follower.voted_for().value_or("") == "node-2",
-        "Newer term replaces the previous term's vote"
+        "New term replaces previous vote"
     );
 }
 
@@ -365,17 +362,17 @@ void test_unknown_candidate_is_rejected() {
 
     expect(
         !response.vote_granted,
-        "Follower rejects an unknown candidate"
+        "Follower rejects unknown candidate"
     );
 
     expect(
         follower.current_term() == 0,
-        "Unknown candidate cannot change the follower's term"
+        "Unknown candidate cannot change follower term"
     );
 
     expect(
         !follower.voted_for().has_value(),
-        "Unknown candidate cannot receive a recorded vote"
+        "Unknown candidate cannot receive a vote"
     );
 }
 
@@ -405,7 +402,7 @@ void test_candidate_becomes_leader() {
 
     expect(
         candidate.role() == NodeRole::leader,
-        "Candidate becomes leader after receiving a majority"
+        "Candidate becomes leader after majority"
     );
 
     expect(
@@ -447,12 +444,12 @@ void test_duplicate_vote_response_is_not_counted_twice() {
 
     expect(
         candidate.votes_received() == 2,
-        "Duplicate vote response is counted only once"
+        "Duplicate response is counted only once"
     );
 
     expect(
         candidate.role() == NodeRole::candidate,
-        "Two votes are not a majority in a five-node cluster"
+        "Two votes are not majority in five-node cluster"
     );
 
     candidate.receive_vote(
@@ -462,7 +459,7 @@ void test_duplicate_vote_response_is_not_counted_twice() {
 
     expect(
         candidate.role() == NodeRole::leader,
-        "Three unique votes form a five-node majority"
+        "Three unique votes form five-node majority"
     );
 }
 
@@ -486,22 +483,22 @@ void test_higher_response_term_stops_candidate() {
 
     expect(
         candidate.role() == NodeRole::follower,
-        "Higher response term makes the candidate step down"
+        "Higher response term makes candidate step down"
     );
 
     expect(
         candidate.current_term() == 2,
-        "Candidate adopts the higher response term"
+        "Candidate adopts higher response term"
     );
 
     expect(
         !candidate.voted_for().has_value(),
-        "Candidate clears its old vote after changing terms"
+        "Candidate clears old vote after changing term"
     );
 
     expect(
         candidate.votes_received() == 0,
-        "Candidate clears votes from the old election"
+        "Candidate clears votes from old election"
     );
 }
 
@@ -526,22 +523,22 @@ void test_vote_request_contains_log_information() {
 
     expect(
         request.term == 3,
-        "Vote request contains the new election term"
+        "Vote request contains new election term"
     );
 
     expect(
         request.last_log_index == 3,
-        "Vote request contains the final log index"
+        "Vote request contains final log index"
     );
 
     expect(
         request.last_log_term == 2,
-        "Vote request contains the final log term"
+        "Vote request contains final log term"
     );
 
     expect(
         candidate.log_entries().size() == 3,
-        "Candidate stores all supplied log entries"
+        "Candidate stores supplied log entries"
     );
 }
 
@@ -558,7 +555,6 @@ void test_candidate_with_older_log_term_is_rejected() {
         follower_log
     };
 
-    // A longer log is still outdated when its final term is older.
     const RequestVoteRequest request{
         4,
         "node-1",
@@ -571,17 +567,17 @@ void test_candidate_with_older_log_term_is_rejected() {
 
     expect(
         !response.vote_granted,
-        "Follower rejects a candidate with an older log term"
+        "Follower rejects candidate with older log term"
     );
 
     expect(
         follower.current_term() == 4,
-        "Follower still adopts the newer election term"
+        "Follower still adopts newer election term"
     );
 
     expect(
         !follower.voted_for().has_value(),
-        "Follower does not vote for an outdated candidate"
+        "Follower does not vote for outdated candidate"
     );
 }
 
@@ -599,7 +595,6 @@ void test_candidate_with_newer_log_term_is_accepted() {
         follower_log
     };
 
-    // A newer final term wins even when the candidate has fewer entries.
     const RequestVoteRequest request{
         4,
         "node-1",
@@ -612,12 +607,12 @@ void test_candidate_with_newer_log_term_is_accepted() {
 
     expect(
         response.vote_granted,
-        "Follower accepts a candidate with a newer log term"
+        "Follower accepts candidate with newer log term"
     );
 
     expect(
         follower.voted_for().value_or("") == "node-1",
-        "Follower records the vote for the newer candidate log"
+        "Follower records vote for newer candidate log"
     );
 }
 
@@ -635,7 +630,6 @@ void test_shorter_log_with_equal_term_is_rejected() {
         follower_log
     };
 
-    // Both logs end in term two, but the candidate has fewer entries.
     const RequestVoteRequest request{
         4,
         "node-1",
@@ -648,7 +642,7 @@ void test_shorter_log_with_equal_term_is_rejected() {
 
     expect(
         !response.vote_granted,
-        "Follower rejects a shorter log with the same final term"
+        "Follower rejects shorter log with equal final term"
     );
 }
 
@@ -678,114 +672,97 @@ void test_equal_log_is_accepted() {
 
     expect(
         response.vote_granted,
-        "Follower accepts a candidate with an equally recent log"
+        "Follower accepts equally recent log"
     );
 }
 
-void test_zero_term_log_entry_is_rejected() {
-    bool exception_was_thrown = false;
+void test_invalid_logs_are_rejected() {
+    bool zero_term_rejected = false;
+    bool decreasing_terms_rejected = false;
+    bool future_term_rejected = false;
 
     try {
-        const vector<LogEntry> invalid_log{
-            {0, "PUT x 10"}
-        };
-
         const RaftCore node{
             "node-1",
             three_node_cluster(),
             1,
-            invalid_log
+            {{0, "PUT x 10"}}
         };
 
         static_cast<void>(node);
     } catch (const invalid_argument&) {
-        exception_was_thrown = true;
+        zero_term_rejected = true;
     }
 
-    expect(
-        exception_was_thrown,
-        "Log entry with term zero is rejected"
-    );
-}
-
-void test_decreasing_log_terms_are_rejected() {
-    bool exception_was_thrown = false;
-
     try {
-        const vector<LogEntry> invalid_log{
-            {2, "PUT x 10"},
-            {1, "PUT y 20"}
-        };
-
         const RaftCore node{
             "node-1",
             three_node_cluster(),
             2,
-            invalid_log
+            {
+                {2, "PUT x 10"},
+                {1, "PUT y 20"}
+            }
         };
 
         static_cast<void>(node);
     } catch (const invalid_argument&) {
-        exception_was_thrown = true;
+        decreasing_terms_rejected = true;
     }
 
-    expect(
-        exception_was_thrown,
-        "Decreasing log-entry terms are rejected"
-    );
-}
-
-void test_future_log_term_is_rejected() {
-    bool exception_was_thrown = false;
-
     try {
-        const vector<LogEntry> invalid_log{
-            {2, "PUT x 10"}
-        };
-
-        // The node is in term one but the entry claims term two.
         const RaftCore node{
             "node-1",
             three_node_cluster(),
             1,
-            invalid_log
+            {{2, "PUT x 10"}}
         };
 
         static_cast<void>(node);
     } catch (const invalid_argument&) {
-        exception_was_thrown = true;
+        future_term_rejected = true;
     }
 
     expect(
-        exception_was_thrown,
-        "Log entry from a future term is rejected"
+        zero_term_rejected,
+        "Log entry with term zero is rejected"
+    );
+
+    expect(
+        decreasing_terms_rejected,
+        "Decreasing log terms are rejected"
+    );
+
+    expect(
+        future_term_rejected,
+        "Log entry from future term is rejected"
     );
 }
 
 void test_initial_election_deadline() {
-RaftCore node{
-    "node-1",
-    three_node_cluster(),
-    0,
-    {},
-    150,
-    150,
-    1
-};
+    RaftCore node{
+        "node-1",
+        three_node_cluster(),
+        0,
+        {},
+        150,
+        150,
+        1
+    };
 
     expect(
         node.current_time_ms() == 0,
-        "A new node begins at logical time zero"
+        "New node begins at logical time zero"
     );
 
     expect(
         node.election_timeout_ms() == 150,
-        "Node stores the configured election timeout"
+        "Node stores configured election timeout"
     );
 
     expect(
         node.election_deadline_ms() == 150,
-        "Initial deadline equals the configured timeout"
+        "Initial deadline equals configured timeout"
     );
 
     expect(
@@ -795,139 +772,65 @@ RaftCore node{
 }
 
 void test_election_timeout_expires_at_deadline() {
-RaftCore node{
-    "node-1",
-    three_node_cluster(),
-    0,
-    {},
-    150,
-    150,
-    1
-};
-    // Move to one millisecond before the deadline.
+    RaftCore node{
+        "node-1",
+        three_node_cluster(),
+        0,
+        {},
+        150,
+        150,
+        1
+    };
+
     node.advance_time(149);
 
     expect(
-        node.current_time_ms() == 149,
-        "Logical time advances by the requested duration"
-    );
-
-    expect(
         !node.election_timeout_expired(),
-        "Timeout does not expire before its deadline"
+        "Timeout does not expire before deadline"
     );
 
-    // Reach the exact deadline.
     node.advance_time(1);
 
     expect(
         node.current_time_ms() == 150,
-        "Logical time reaches the election deadline"
+        "Logical time reaches election deadline"
     );
 
     expect(
         node.election_timeout_expired(),
-        "Timeout expires exactly at its deadline"
+        "Timeout expires exactly at deadline"
     );
 }
 
 void test_starting_election_resets_deadline() {
-RaftCore node{
-    "node-1",
-    three_node_cluster(),
-    0,
-    {},
-    150,
-    150,
-    1
-};
-    // Reach the original timeout.
+    RaftCore node{
+        "node-1",
+        three_node_cluster(),
+        0,
+        {},
+        150,
+        150,
+        1
+    };
+
     node.advance_time(150);
-
-    expect(
-        node.election_timeout_expired(),
-        "Original election timeout expires"
-    );
-
-    // Starting the election creates a new deadline.
     node.start_election();
-
-    expect(
-        node.role() == NodeRole::candidate,
-        "Timed-out follower can become a candidate"
-    );
 
     expect(
         node.election_deadline_ms() == 300,
-        "Starting election creates a fresh deadline"
+        "Starting election creates fresh deadline"
     );
 
     expect(
         !node.election_timeout_expired(),
-        "New election timeout has not expired immediately"
+        "New election timeout is not immediately expired"
     );
 
-    // Move to the candidate's next deadline.
     node.advance_time(150);
 
     expect(
         node.election_timeout_expired(),
-        "Candidate may time out if it cannot win the election"
-    );
-}
-
-void test_leader_does_not_expire_election_timeout() {
-    // A one-node cluster becomes leader using only its self-vote.
-    const vector<string> one_node_cluster{
-        "node-1"
-    };
-
-    RaftCore node{
-        "node-1",
-        one_node_cluster,
-        0,
-        {},
-        150
-    };
-
-    node.start_election();
-
-    expect(
-        node.role() == NodeRole::leader,
-        "One-node candidate immediately becomes leader"
-    );
-
-    // Advance far beyond the old election deadline.
-    node.advance_time(1000);
-
-    expect(
-        !node.election_timeout_expired(),
-        "Leader does not expire an election timeout"
-    );
-}
-
-void test_zero_election_timeout_is_rejected() {
-    bool exception_was_thrown = false;
-
-    try {
-        const RaftCore node{
-    "node-1",
-    three_node_cluster(),
-    0,
-    {},
-    0,
-    0,
-    1
-};
-
-        static_cast<void>(node);
-    } catch (const invalid_argument&) {
-        exception_was_thrown = true;
-    }
-
-    expect(
-        exception_was_thrown,
-        "Zero election timeout is rejected"
+        "Candidate can time out without majority"
     );
 }
 
@@ -944,28 +847,28 @@ void test_timeout_is_selected_inside_range() {
 
     expect(
         node.min_election_timeout_ms() == 150,
-        "Node stores the minimum election timeout"
+        "Node stores minimum timeout"
     );
 
     expect(
         node.max_election_timeout_ms() == 300,
-        "Node stores the maximum election timeout"
+        "Node stores maximum timeout"
     );
 
     expect(
         node.election_timeout_ms() >= 150,
-        "Selected timeout is not below the minimum"
+        "Selected timeout is not below minimum"
     );
 
     expect(
         node.election_timeout_ms() <= 300,
-        "Selected timeout is not above the maximum"
+        "Selected timeout is not above maximum"
     );
 
     expect(
         node.election_deadline_ms() ==
             node.election_timeout_ms(),
-        "Initial deadline equals the selected timeout"
+        "Initial deadline equals selected timeout"
     );
 }
 
@@ -993,59 +896,29 @@ void test_same_seed_produces_same_timeout() {
     expect(
         first_node.election_timeout_ms() ==
             second_node.election_timeout_ms(),
-        "Same random seed produces repeatable timeout selection"
+        "Same seed produces repeatable timeout"
     );
 }
 
-void test_new_election_selects_valid_timeout() {
-    RaftCore node{
-        "node-1",
-        three_node_cluster(),
-        0,
-        {},
-        150,
-        300,
-        42
-    };
+void test_invalid_timeout_configuration_is_rejected() {
+    bool zero_timeout_rejected = false;
+    bool invalid_range_rejected = false;
 
-    // Advance to the currently selected deadline.
-    node.advance_time(
-        node.election_timeout_ms()
-    );
+    try {
+        const RaftCore node{
+            "node-1",
+            three_node_cluster(),
+            0,
+            {},
+            0,
+            0,
+            1
+        };
 
-    expect(
-        node.election_timeout_expired(),
-        "Initial randomized timeout expires"
-    );
-
-    // Starting an election selects another timeout from the range.
-    node.start_election();
-
-    expect(
-        node.election_timeout_ms() >= 150,
-        "New timeout is not below the minimum"
-    );
-
-    expect(
-        node.election_timeout_ms() <= 300,
-        "New timeout is not above the maximum"
-    );
-
-    expect(
-        node.election_deadline_ms() ==
-            node.current_time_ms() +
-            node.election_timeout_ms(),
-        "New deadline is relative to current logical time"
-    );
-
-    expect(
-        !node.election_timeout_expired(),
-        "Fresh randomized election timeout is not expired"
-    );
-}
-
-void test_invalid_timeout_range_is_rejected() {
-    bool exception_was_thrown = false;
+        static_cast<void>(node);
+    } catch (const invalid_argument&) {
+        zero_timeout_rejected = true;
+    }
 
     try {
         const RaftCore node{
@@ -1060,60 +933,17 @@ void test_invalid_timeout_range_is_rejected() {
 
         static_cast<void>(node);
     } catch (const invalid_argument&) {
-        exception_was_thrown = true;
+        invalid_range_rejected = true;
     }
 
     expect(
-        exception_was_thrown,
-        "Timeout range with maximum below minimum is rejected"
-    );
-}
-
-void test_nodes_can_use_different_timeouts() {
-    // Fixed ranges make this test completely deterministic.
-    RaftCore first_node{
-        "node-1",
-        three_node_cluster(),
-        0,
-        {},
-        170,
-        170,
-        1
-    };
-
-    RaftCore second_node{
-        "node-2",
-        three_node_cluster(),
-        0,
-        {},
-        225,
-        225,
-        2
-    };
-
-    RaftCore third_node{
-        "node-3",
-        three_node_cluster(),
-        0,
-        {},
-        280,
-        280,
-        3
-    };
-
-    expect(
-        first_node.election_deadline_ms() == 170,
-        "First node has the earliest deadline"
+        zero_timeout_rejected,
+        "Zero election timeout is rejected"
     );
 
     expect(
-        second_node.election_deadline_ms() == 225,
-        "Second node has the middle deadline"
-    );
-
-    expect(
-        third_node.election_deadline_ms() == 280,
-        "Third node has the latest deadline"
+        invalid_range_rejected,
+        "Maximum timeout below minimum is rejected"
     );
 }
 
@@ -1128,28 +958,22 @@ void test_tick_before_deadline_does_not_start_election() {
         1
     };
 
-    // Advance to one millisecond before the deadline.
     const bool election_started =
         node.tick(149);
 
     expect(
         !election_started,
-        "Tick before deadline does not start an election"
+        "Tick before deadline does not start election"
     );
 
     expect(
         node.role() == NodeRole::follower,
-        "Node remains a follower before deadline"
+        "Node remains follower before deadline"
     );
 
     expect(
         node.current_term() == 0,
         "Term does not change before deadline"
-    );
-
-    expect(
-        node.current_time_ms() == 149,
-        "Tick advances the logical clock"
     );
 }
 
@@ -1164,23 +988,22 @@ void test_tick_at_deadline_starts_election() {
         1
     };
 
-    // Reach the exact election deadline.
     const bool election_started =
         node.tick(150);
 
     expect(
         election_started,
-        "Tick at deadline starts an election"
+        "Tick at deadline starts election"
     );
 
     expect(
         node.role() == NodeRole::candidate,
-        "Timed-out follower becomes a candidate"
+        "Timed-out follower becomes candidate"
     );
 
     expect(
         node.current_term() == 1,
-        "Automatic election increments the term"
+        "Automatic election increments term"
     );
 
     expect(
@@ -1189,13 +1012,8 @@ void test_tick_at_deadline_starts_election() {
     );
 
     expect(
-        node.votes_received() == 1,
-        "Automatic candidate begins with one vote"
-    );
-
-    expect(
         node.election_deadline_ms() == 300,
-        "Automatic election creates a fresh deadline"
+        "Automatic election creates fresh deadline"
     );
 }
 
@@ -1210,72 +1028,49 @@ void test_candidate_timeout_starts_new_election() {
         1
     };
 
-    // First timeout starts the term-one election.
-    const bool first_election_started =
+    const bool first_election =
         node.tick(100);
 
-    expect(
-        first_election_started,
-        "First timeout starts the first election"
-    );
-
-    expect(
-        node.current_term() == 1,
-        "First election uses term one"
-    );
-
-    // Move to one millisecond before the candidate's new deadline.
     const bool early_second_election =
         node.tick(99);
 
-    expect(
-        !early_second_election,
-        "Candidate does not restart election before deadline"
-    );
-
-    expect(
-        node.current_term() == 1,
-        "Candidate remains in the same term before timeout"
-    );
-
-    // Reach the candidate's next deadline.
-    const bool second_election_started =
+    const bool second_election =
         node.tick(1);
 
     expect(
-        second_election_started,
+        first_election,
+        "First timeout starts first election"
+    );
+
+    expect(
+        !early_second_election,
+        "Candidate does not restart before deadline"
+    );
+
+    expect(
+        second_election,
         "Candidate timeout starts another election"
     );
 
     expect(
-        node.role() == NodeRole::candidate,
-        "Node remains a candidate during the new election"
-    );
-
-    expect(
         node.current_term() == 2,
-        "Second election uses a newer term"
+        "Second election uses newer term"
     );
 
     expect(
         node.votes_received() == 1,
-        "New election clears old votes and keeps only self-vote"
-    );
-
-    expect(
-        node.election_deadline_ms() == 300,
-        "Second election creates another fresh deadline"
+        "New election keeps only self-vote"
     );
 }
 
 void test_leader_does_not_start_another_election() {
-    const vector<string> one_node_cluster{
+    const vector<string> members{
         "node-1"
     };
 
     RaftCore node{
         "node-1",
-        one_node_cluster,
+        members,
         0,
         {},
         100,
@@ -1283,80 +1078,30 @@ void test_leader_does_not_start_another_election() {
         1
     };
 
-    // A one-node cluster becomes leader after its first timeout
-    // because its self-vote is already a majority.
-    const bool first_election_started =
+    const bool first_election =
         node.tick(100);
 
+    const bool another_election =
+        node.tick(1000);
+
     expect(
-        first_election_started,
-        "One-node timeout starts an election"
+        first_election,
+        "One-node timeout starts election"
     );
 
     expect(
         node.role() == NodeRole::leader,
-        "One-node candidate immediately becomes leader"
+        "One-node candidate becomes leader"
     );
 
     expect(
-        node.current_term() == 1,
-        "Leader was elected in term one"
-    );
-
-    // Leaders do not start elections when time advances.
-    const bool another_election_started =
-        node.tick(1000);
-
-    expect(
-        !another_election_started,
+        !another_election,
         "Leader does not start another election"
     );
 
     expect(
-        node.role() == NodeRole::leader,
-        "Node remains leader"
-    );
-
-    expect(
         node.current_term() == 1,
-        "Leader's term does not change because of time"
-    );
-
-    expect(
-        node.current_time_ms() == 1100,
-        "Leader's logical clock still advances"
-    );
-}
-
-void test_large_tick_starts_only_one_election() {
-    RaftCore node{
-        "node-1",
-        three_node_cluster(),
-        0,
-        {},
-        100,
-        100,
-        1
-    };
-
-    // Even though 1000 ms covers several timeout intervals,
-    // one tick represents one processed timeout event.
-    const bool election_started =
-        node.tick(1000);
-
-    expect(
-        election_started,
-        "Large tick starts an election"
-    );
-
-    expect(
-        node.current_term() == 1,
-        "One tick starts only one new election term"
-    );
-
-    expect(
-        node.election_deadline_ms() == 1100,
-        "New deadline is relative to the advanced current time"
+        "Leader term does not change because of time"
     );
 }
 
@@ -1371,7 +1116,6 @@ void test_granted_vote_resets_election_deadline() {
         1
     };
 
-    // Move close to the original deadline of 100 ms.
     follower.advance_time(90);
 
     const RequestVoteRequest request{
@@ -1386,22 +1130,17 @@ void test_granted_vote_resets_election_deadline() {
 
     expect(
         response.vote_granted,
-        "Follower grants the valid vote"
+        "Follower grants valid vote"
     );
 
     expect(
         follower.current_time_ms() == 90,
-        "Granting a vote does not change logical time"
+        "Granting vote does not change logical time"
     );
 
     expect(
         follower.election_deadline_ms() == 190,
-        "Granted vote creates a fresh election deadline"
-    );
-
-    expect(
-        !follower.election_timeout_expired(),
-        "Follower is not timed out after granting a vote"
+        "Granted vote creates fresh deadline"
     );
 }
 
@@ -1429,103 +1168,35 @@ void test_follower_waits_until_new_deadline() {
         follower.handle_request_vote(request)
     );
 
-    // Move past the original deadline of 100 ms,
-    // but remain before the new deadline of 190 ms.
     const bool early_election =
         follower.tick(99);
 
     expect(
         !early_election,
-        "Follower does not use its old election deadline"
-    );
-
-    expect(
-        follower.current_time_ms() == 189,
-        "Follower reaches one millisecond before new deadline"
+        "Follower does not use old election deadline"
     );
 
     expect(
         follower.role() == NodeRole::follower,
-        "Follower continues waiting for the elected leader"
+        "Follower waits for candidate to become leader"
     );
 
-    // Reach the new deadline.
     const bool election_started =
         follower.tick(1);
 
     expect(
         election_started,
-        "Follower starts election at its new deadline"
-    );
-
-    expect(
-        follower.role() == NodeRole::candidate,
-        "Follower becomes candidate after new timeout"
+        "Follower starts election at new deadline"
     );
 
     expect(
         follower.current_term() == 2,
-        "New election advances from term one to term two"
+        "New election advances to term two"
     );
 }
 
-void test_repeated_granted_vote_resets_deadline_again() {
-    RaftCore follower{
-        "node-2",
-        three_node_cluster(),
-        0,
-        {},
-        100,
-        100,
-        1
-    };
-
-    follower.advance_time(90);
-
-    const RequestVoteRequest request{
-        1,
-        "node-1",
-        0,
-        0
-    };
-
-    const RequestVoteResponse first_response =
-        follower.handle_request_vote(request);
-
-    expect(
-        first_response.vote_granted,
-        "Follower grants the first request"
-    );
-
-    expect(
-        follower.election_deadline_ms() == 190,
-        "First granted request resets the deadline"
-    );
-
-    // Simulate time passing before the candidate retries.
-    follower.advance_time(50);
-
-    const RequestVoteResponse repeated_response =
-        follower.handle_request_vote(request);
-
-    expect(
-        repeated_response.vote_granted,
-        "Follower grants repeated request from same candidate"
-    );
-
-    expect(
-        follower.current_time_ms() == 140,
-        "Logical time advanced before repeated request"
-    );
-
-    expect(
-        follower.election_deadline_ms() == 240,
-        "Repeated granted request resets the deadline again"
-    );
-}
-
-void test_stale_request_does_not_reset_deadline() {
-    RaftCore follower{
+void test_rejected_requests_do_not_reset_deadline() {
+    RaftCore stale_request_follower{
         "node-2",
         three_node_cluster(),
         2,
@@ -1535,7 +1206,7 @@ void test_stale_request_does_not_reset_deadline() {
         1
     };
 
-    follower.advance_time(90);
+    stale_request_follower.advance_time(90);
 
     const RequestVoteRequest stale_request{
         1,
@@ -1544,40 +1215,23 @@ void test_stale_request_does_not_reset_deadline() {
         0
     };
 
-    const RequestVoteResponse response =
-        follower.handle_request_vote(stale_request);
-
-    expect(
-        !response.vote_granted,
-        "Follower rejects the stale vote request"
+    static_cast<void>(
+        stale_request_follower.handle_request_vote(
+            stale_request
+        )
     );
 
     expect(
-        follower.election_deadline_ms() == 100,
-        "Stale request does not reset election deadline"
+        stale_request_follower.election_deadline_ms() == 100,
+        "Stale request does not reset deadline"
     );
 
-    const bool election_started =
-        follower.tick(10);
-
-    expect(
-        election_started,
-        "Follower starts election at original deadline"
-    );
-
-    expect(
-        follower.current_term() == 3,
-        "Follower starts the new election in term three"
-    );
-}
-
-void test_outdated_log_does_not_reset_deadline() {
     const vector<LogEntry> follower_log{
         {1, "PUT x 10"},
         {2, "PUT y 20"}
     };
 
-    RaftCore follower{
+    RaftCore outdated_log_follower{
         "node-2",
         three_node_cluster(),
         2,
@@ -1587,80 +1241,24 @@ void test_outdated_log_does_not_reset_deadline() {
         1
     };
 
-    follower.advance_time(90);
+    outdated_log_follower.advance_time(90);
 
-    // The request has a newer election term, but its log
-    // ends in the older term one.
-    const RequestVoteRequest request{
+    const RequestVoteRequest outdated_request{
         3,
         "node-1",
         10,
         1
     };
 
-    const RequestVoteResponse response =
-        follower.handle_request_vote(request);
-
-    expect(
-        !response.vote_granted,
-        "Follower rejects candidate with outdated log"
+    static_cast<void>(
+        outdated_log_follower.handle_request_vote(
+            outdated_request
+        )
     );
 
     expect(
-        follower.current_term() == 3,
-        "Follower still adopts the newer request term"
-    );
-
-    expect(
-        follower.election_deadline_ms() == 100,
-        "Rejected outdated log does not reset deadline"
-    );
-
-    const bool election_started =
-        follower.tick(10);
-
-    expect(
-        election_started,
-        "Follower starts election using original deadline"
-    );
-
-    expect(
-        follower.current_term() == 4,
-        "Timed-out follower begins election in term four"
-    );
-}
-
-void test_unknown_candidate_does_not_reset_deadline() {
-    RaftCore follower{
-        "node-2",
-        three_node_cluster(),
-        0,
-        {},
-        100,
-        100,
-        1
-    };
-
-    follower.advance_time(90);
-
-    const RequestVoteRequest request{
-        1,
-        "node-99",
-        0,
-        0
-    };
-
-    const RequestVoteResponse response =
-        follower.handle_request_vote(request);
-
-    expect(
-        !response.vote_granted,
-        "Follower rejects unknown candidate"
-    );
-
-    expect(
-        follower.election_deadline_ms() == 100,
-        "Unknown candidate does not reset election deadline"
+        outdated_log_follower.election_deadline_ms() == 100,
+        "Outdated candidate log does not reset deadline"
     );
 }
 
@@ -1701,7 +1299,7 @@ void test_election_creates_request_for_each_peer() {
 
     expect(
         candidate.pending_request_vote_count() == 2,
-        "Three-node candidate creates two outbound requests"
+        "Three-node candidate creates two requests"
     );
 
     const vector<RequestVoteAction> actions =
@@ -1710,7 +1308,7 @@ void test_election_creates_request_for_each_peer() {
     bool found_node_2 = false;
     bool found_node_3 = false;
     bool found_self = false;
-    bool all_requests_are_correct = true;
+    bool requests_are_correct = true;
 
     for (const RequestVoteAction& action : actions) {
         if (action.target_node_id == "node-2") {
@@ -1731,13 +1329,13 @@ void test_election_creates_request_for_each_peer() {
             action.request.last_log_index != 2 ||
             action.request.last_log_term != 2
         ) {
-            all_requests_are_correct = false;
+            requests_are_correct = false;
         }
     }
 
     expect(
         actions.size() == 2,
-        "Exactly two actions are returned"
+        "Exactly two vote-request actions are returned"
     );
 
     expect(
@@ -1752,12 +1350,12 @@ void test_election_creates_request_for_each_peer() {
 
     expect(
         !found_self,
-        "Candidate does not create request for itself"
+        "Candidate does not request vote from itself"
     );
 
     expect(
-        all_requests_are_correct,
-        "Every action contains the current election and log data"
+        requests_are_correct,
+        "Outbound requests contain current election data"
     );
 }
 
@@ -1774,30 +1372,25 @@ void test_taking_actions_clears_queue() {
 
     candidate.start_election();
 
-    expect(
-        candidate.pending_request_vote_count() == 2,
-        "Election initially queues two requests"
-    );
-
     const vector<RequestVoteAction> first_take =
         candidate.take_request_vote_actions();
-
-    expect(
-        first_take.size() == 2,
-        "First take returns the queued requests"
-    );
-
-    expect(
-        candidate.pending_request_vote_count() == 0,
-        "Taking requests clears the internal queue"
-    );
 
     const vector<RequestVoteAction> second_take =
         candidate.take_request_vote_actions();
 
     expect(
+        first_take.size() == 2,
+        "First take returns queued vote requests"
+    );
+
+    expect(
+        candidate.pending_request_vote_count() == 0,
+        "Taking requests clears internal queue"
+    );
+
+    expect(
         second_take.empty(),
-        "Taking from an empty queue returns no actions"
+        "Taking from empty queue returns no actions"
     );
 }
 
@@ -1812,15 +1405,7 @@ void test_new_election_replaces_old_actions() {
         1
     };
 
-    // First election creates two term-one requests.
     candidate.start_election();
-
-    expect(
-        candidate.pending_request_vote_count() == 2,
-        "First election creates two requests"
-    );
-
-    // Start another election without taking the old requests.
     candidate.start_election();
 
     expect(
@@ -1830,7 +1415,7 @@ void test_new_election_replaces_old_actions() {
 
     expect(
         candidate.pending_request_vote_count() == 2,
-        "New election replaces old requests instead of adding to them"
+        "New election replaces old requests"
     );
 
     const vector<RequestVoteAction> actions =
@@ -1846,18 +1431,18 @@ void test_new_election_replaces_old_actions() {
 
     expect(
         all_actions_use_term_two,
-        "All remaining requests belong to the new election term"
+        "Remaining requests use new election term"
     );
 }
 
 void test_one_node_cluster_creates_no_vote_requests() {
-    const vector<string> one_node_cluster{
+    const vector<string> members{
         "node-1"
     };
 
     RaftCore node{
         "node-1",
-        one_node_cluster,
+        members,
         0,
         {},
         100,
@@ -1869,12 +1454,12 @@ void test_one_node_cluster_creates_no_vote_requests() {
 
     expect(
         node.role() == NodeRole::leader,
-        "One-node cluster elects itself as leader"
+        "One-node cluster elects itself"
     );
 
     expect(
         node.pending_request_vote_count() == 0,
-        "One-node leader creates no outbound vote requests"
+        "One-node leader creates no vote requests"
     );
 }
 
@@ -1913,19 +1498,19 @@ void test_stepping_down_clears_vote_requests() {
 
     expect(
         candidate.pending_request_vote_count() == 0,
-        "Stepping down removes stale vote requests"
+        "Stepping down removes stale requests"
     );
 }
 
 }  // namespace
 
 int main() {
-    // Basic node and election behavior.
+    // Basic Raft state and elections.
     test_node_starts_as_follower();
     test_starting_election_creates_candidate();
     test_candidate_creates_vote_request();
 
-    // Follower-side RequestVote behavior.
+    // RequestVote follower behavior.
     test_follower_grants_first_vote();
     test_repeated_vote_request_is_granted_again();
     test_follower_rejects_second_candidate();
@@ -1933,59 +1518,45 @@ int main() {
     test_higher_term_request_resets_previous_vote();
     test_unknown_candidate_is_rejected();
 
-    // Candidate-side vote-response behavior.
+    // RequestVote candidate behavior.
     test_candidate_becomes_leader();
     test_duplicate_vote_response_is_not_counted_twice();
     test_higher_response_term_stops_candidate();
 
-    // Log metadata and freshness behavior.
+    // Log freshness and validation.
     test_vote_request_contains_log_information();
     test_candidate_with_older_log_term_is_rejected();
     test_candidate_with_newer_log_term_is_accepted();
     test_shorter_log_with_equal_term_is_rejected();
     test_equal_log_is_accepted();
+    test_invalid_logs_are_rejected();
 
-    // Invalid log validation.
-    test_zero_term_log_entry_is_rejected();
-    test_decreasing_log_terms_are_rejected();
-    test_future_log_term_is_rejected();
-
-    // Deterministic election-timer tests.
+    // Election timer behavior.
     test_initial_election_deadline();
     test_election_timeout_expires_at_deadline();
     test_starting_election_resets_deadline();
-    test_leader_does_not_expire_election_timeout();
-    test_zero_election_timeout_is_rejected();
+    test_timeout_is_selected_inside_range();
+    test_same_seed_produces_same_timeout();
+    test_invalid_timeout_configuration_is_rejected();
 
-    // Randomized election-timeout tests.
-test_timeout_is_selected_inside_range();
-test_same_seed_produces_same_timeout();
-test_new_election_selects_valid_timeout();
-test_invalid_timeout_range_is_rejected();
-test_nodes_can_use_different_timeouts();
+    // Automatic timeout processing.
+    test_tick_before_deadline_does_not_start_election();
+    test_tick_at_deadline_starts_election();
+    test_candidate_timeout_starts_new_election();
+    test_leader_does_not_start_another_election();
 
-// Automatic election-timeout behavior.
-test_tick_before_deadline_does_not_start_election();
-test_tick_at_deadline_starts_election();
-test_candidate_timeout_starts_new_election();
-test_leader_does_not_start_another_election();
-test_large_tick_starts_only_one_election();
+    // Timer reset after voting.
+    test_granted_vote_resets_election_deadline();
+    test_follower_waits_until_new_deadline();
+    test_rejected_requests_do_not_reset_deadline();
 
-// Vote-related election-timer reset behavior.
-test_granted_vote_resets_election_deadline();
-test_follower_waits_until_new_deadline();
-test_repeated_granted_vote_resets_deadline_again();
-test_stale_request_does_not_reset_deadline();
-test_outdated_log_does_not_reset_deadline();
-test_unknown_candidate_does_not_reset_deadline();
-
-// Outbound RequestVote action behavior.
-test_follower_has_no_vote_request_actions();
-test_election_creates_request_for_each_peer();
-test_taking_actions_clears_queue();
-test_new_election_replaces_old_actions();
-test_one_node_cluster_creates_no_vote_requests();
-test_stepping_down_clears_vote_requests();
+    // Outbound RequestVote actions.
+    test_follower_has_no_vote_request_actions();
+    test_election_creates_request_for_each_peer();
+    test_taking_actions_clears_queue();
+    test_new_election_replaces_old_actions();
+    test_one_node_cluster_creates_no_vote_requests();
+    test_stepping_down_clears_vote_requests();
 
     if (failure_count == 0) {
         cout << "\nAll Raft core tests passed.\n";

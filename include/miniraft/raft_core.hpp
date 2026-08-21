@@ -1,94 +1,84 @@
 #pragma once
 
-// Standard library types used by the Raft core.
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <random>
 #include <string>
 #include <string_view>
 #include <unordered_set>
 #include <vector>
-#include <random>
 
 namespace miniraft {
 
-// Import only the standard library names used in this header.
+// Import only commonly used standard-library type names.
+using std::mt19937_64;
 using std::size_t;
 using std::string;
 using std::string_view;
 using std::uint64_t;
 using std::unordered_set;
 using std::vector;
-using std::mt19937_64;
 
-// Create a readable alias for values that may be empty.
+// Readable alias for a value that may be absent.
 template <typename ValueType>
 using Optional = std::optional<ValueType>;
 
-// Every Raft node must be in exactly one of these roles.
+// Every Raft node is in exactly one of these roles.
 enum class NodeRole {
     follower,
     candidate,
     leader
 };
 
-// Convert a role into readable text for logs and terminal output.
+// Convert a role into readable text.
 string_view to_string(NodeRole role);
 
-// One command stored in the replicated Raft log.
+// One command stored in the Raft log.
 struct LogEntry {
-    // Term in which the leader created this entry.
+    // Term in which the entry was created.
     uint64_t term{0};
 
-    // Command that will eventually be applied to the state machine.
-    //
-    // Examples:
-    // "PUT x 10"
-    // "DELETE x"
+    // Command that will eventually be applied.
     string command;
 };
 
-// Message sent by a candidate when requesting a vote.
+// Request sent by a candidate to obtain a vote.
 struct RequestVoteRequest {
-    // Election term of the candidate.
+    // Candidate's current election term.
     uint64_t term{0};
 
-    // Unique ID of the candidate.
+    // Candidate requesting the vote.
     string candidate_id;
 
-    // Logical index of the candidate's final log entry.
+    // Candidate's final logical log index.
     uint64_t last_log_index{0};
 
     // Term of the candidate's final log entry.
     uint64_t last_log_term{0};
 };
 
-// Message returned after processing a vote request.
+// Response returned by a node after processing a vote request.
 struct RequestVoteResponse {
-    // Current term of the node sending this response.
+    // Responder's current term.
     uint64_t term{0};
 
     // True when the vote was granted.
     bool vote_granted{false};
 };
 
+// Instruction to send one vote request to one target node.
 struct RequestVoteAction {
     // Node that should receive the request.
     string target_node_id;
 
-    // Request that should be delivered to the target node.
+    // Request that should be delivered.
     RequestVoteRequest request;
 };
 
 class RaftCore {
 public:
-    // Create a Raft node.
-    //
-    // initial_term and initial_log allow tests to construct nodes
-    // with different log histories.
-    //
-    // Later, persistent storage will provide these values when
-    // recovering a node after a restart.
+    // Construct a node with static cluster membership.
     RaftCore(
         string node_id,
         vector<string> cluster_members,
@@ -99,7 +89,7 @@ public:
         uint64_t random_seed = 1
     );
 
-    // Read-only accessors for the node's current state.
+    // Basic node-state accessors.
     [[nodiscard]] const string& node_id() const;
     [[nodiscard]] NodeRole role() const;
     [[nodiscard]] uint64_t current_term() const;
@@ -107,44 +97,35 @@ public:
     [[nodiscard]] size_t votes_received() const;
     [[nodiscard]] size_t cluster_size() const;
 
-    // Return all local log entries.
-    //
-    // The const reference prevents callers from changing the log.
+    // Log accessors.
     [[nodiscard]]
     const vector<LogEntry>& log_entries() const;
 
-    // Return the logical index of the final local log entry.
-    //
-    // Empty log: index 0
-    // One entry: index 1
-    // Three entries: index 3
     [[nodiscard]] uint64_t last_log_index() const;
-
-    // Return the term belonging to the final local log entry.
-    //
-    // An empty log has last term zero.
     [[nodiscard]] uint64_t last_log_term() const;
 
+    // Election-timer accessors.
+    [[nodiscard]] uint64_t current_time_ms() const;
     [[nodiscard]] uint64_t min_election_timeout_ms() const;
     [[nodiscard]] uint64_t max_election_timeout_ms() const;
-
-    [[nodiscard]] uint64_t current_time_ms() const;
     [[nodiscard]] uint64_t election_timeout_ms() const;
     [[nodiscard]] uint64_t election_deadline_ms() const;
     [[nodiscard]] bool election_timeout_expired() const;
 
+    // Advance logical time without automatically processing timeout.
     void advance_time(uint64_t elapsed_ms);
 
+    // Advance logical time and start an election when timed out.
     [[nodiscard]] bool tick(uint64_t elapsed_ms);
 
-    // Start a new election.
+    // Start an election immediately.
     void start_election();
 
-    // Create a RequestVote message for this candidate.
+    // Build the vote request for the current election.
     [[nodiscard]]
     RequestVoteRequest make_request_vote_request() const;
 
-    // Process a vote request received from another candidate.
+    // Process an incoming vote request.
     [[nodiscard]]
     RequestVoteResponse handle_request_vote(
         const RequestVoteRequest& request
@@ -156,15 +137,28 @@ public:
         const RequestVoteResponse& response
     );
 
+    // Inspect the number of outbound vote requests.
+    [[nodiscard]]
+    size_t pending_request_vote_count() const;
+
+    // Return all outbound vote requests and empty the queue.
+    [[nodiscard]]
+    vector<RequestVoteAction> take_request_vote_actions();
+
 private:
-    // Become a follower after discovering a newer term.
+    // Change to follower after discovering a newer term.
     void become_follower(uint64_t new_term);
+
+    // Select a timeout and calculate a fresh deadline.
     void reset_election_deadline();
+
+    // Create one vote-request action for every other node.
+    void queue_request_vote_actions();
 
     // Calculate the number of votes required to win.
     [[nodiscard]] size_t majority_size() const;
 
-    // Compare a candidate's final log position with our final log position.
+    // Determine whether a candidate's log is sufficiently recent.
     [[nodiscard]]
     bool candidate_log_is_up_to_date(
         uint64_t candidate_last_log_index,
@@ -174,43 +168,40 @@ private:
     // Unique ID of this node.
     string node_id_;
 
-    // IDs of all valid cluster members.
+    // Complete static cluster membership.
     unordered_set<string> cluster_members_;
 
-    // Ordered log entries stored by this node.
+    // Ordered local Raft log.
     vector<LogEntry> log_entries_;
 
-    // Current role of this node.
+    // Current node role.
     NodeRole role_{NodeRole::follower};
 
-    // Current logical election term.
+    // Latest term known by this node.
     uint64_t current_term_{0};
 
-    // Candidate selected by this node in the current term.
+    // Candidate selected in the current term.
     Optional<string> voted_for_;
 
-    // Unique votes collected while acting as a candidate.
+    // Unique votes collected during the current election.
     unordered_set<string> votes_received_;
 
     // Current deterministic logical time.
     uint64_t current_time_ms_{0};
 
-    // Lower boundary for randomized election timeouts.
+    // Randomized timeout boundaries.
     uint64_t min_election_timeout_ms_{150};
-
-    // Upper boundary for randomized election timeouts.
     uint64_t max_election_timeout_ms_{300};
 
-    // Timeout selected for the current election-timer interval.
+    // Timeout and deadline selected for the current interval.
     uint64_t election_timeout_ms_{0};
-
-    // Logical time when the current timer expires.
     uint64_t election_deadline_ms_{0};
 
-    // Deterministic random-number engine.
-    //
-    // Tests receive repeatable values when they use the same seed.
+    // Deterministic random engine used by tests and simulations.
     mt19937_64 random_engine_;
+
+    // Vote requests waiting for delivery.
+    vector<RequestVoteAction> pending_request_vote_actions_;
 };
 
 }  // namespace miniraft

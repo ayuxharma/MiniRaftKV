@@ -1,17 +1,13 @@
 #include "miniraft/raft_core.hpp"
 
 #include <random>
-
 #include <stdexcept>
-
-// Provides move(), which avoids unnecessary copies.
 #include <utility>
 
 namespace miniraft {
 
 using std::invalid_argument;
 using std::logic_error;
-using std::move;
 using std::uniform_int_distribution;
 
 string_view to_string(const NodeRole role) {
@@ -40,35 +36,35 @@ RaftCore::RaftCore(
     const uint64_t max_election_timeout_ms,
     const uint64_t random_seed
 )
-    : node_id_{move(node_id)},
-      log_entries_{move(initial_log)},
+    : node_id_{std::move(node_id)},
+      log_entries_{std::move(initial_log)},
       current_term_{initial_term},
       min_election_timeout_ms_{min_election_timeout_ms},
       max_election_timeout_ms_{max_election_timeout_ms},
       random_engine_{random_seed} {
 
-    // Every node must have a non-empty identity.
+    // Every node requires a non-empty identity.
     if (node_id_.empty()) {
         throw invalid_argument{
             "Node ID cannot be empty"
         };
     }
 
-    // A zero minimum would allow an immediate timeout.
+    // A zero timeout would expire immediately.
     if (min_election_timeout_ms_ == 0) {
         throw invalid_argument{
             "Minimum election timeout must be greater than zero"
         };
     }
 
-    // The maximum boundary must not be below the minimum.
+    // Validate the timeout range.
     if (max_election_timeout_ms_ < min_election_timeout_ms_) {
         throw invalid_argument{
             "Maximum election timeout cannot be less than minimum"
         };
     }
 
-    // This project currently supports odd-sized clusters.
+    // This mini implementation uses odd-sized clusters.
     if (
         cluster_members.empty() ||
         cluster_members.size() % 2 == 0
@@ -89,7 +85,6 @@ RaftCore::RaftCore(
         const auto [iterator, was_inserted] =
             cluster_members_.insert(member_id);
 
-        // We do not need the returned iterator.
         static_cast<void>(iterator);
 
         if (!was_inserted) {
@@ -99,7 +94,7 @@ RaftCore::RaftCore(
         }
     }
 
-    // The node must be present in its own cluster configuration.
+    // The node must appear in its own membership list.
     if (
         cluster_members_.find(node_id_) ==
         cluster_members_.end()
@@ -109,32 +104,28 @@ RaftCore::RaftCore(
         };
     }
 
-    // Validate terms in the supplied or recovered log.
+    // Validate the supplied or recovered log.
     uint64_t previous_entry_term = 0;
 
     for (const LogEntry& entry : log_entries_) {
-        // Term zero is reserved for the empty-log sentinel.
         if (entry.term == 0) {
             throw invalid_argument{
                 "A log entry must have a non-zero term"
             };
         }
 
-        // Every entry currently requires a readable command.
         if (entry.command.empty()) {
             throw invalid_argument{
                 "A log entry command cannot be empty"
             };
         }
 
-        // Log terms cannot decrease as indexes increase.
         if (entry.term < previous_entry_term) {
             throw invalid_argument{
                 "Log entry terms cannot decrease"
             };
         }
 
-        // A node cannot contain an entry from a future term.
         if (entry.term > current_term_) {
             throw invalid_argument{
                 "Log entry term cannot exceed the node's current term"
@@ -144,9 +135,7 @@ RaftCore::RaftCore(
         previous_entry_term = entry.term;
     }
 
-    // Select the first randomized election timeout.
-    //
-    // This must happen after validating the timeout range.
+    // Select the initial randomized timeout.
     reset_election_deadline();
 }
 
@@ -174,34 +163,16 @@ size_t RaftCore::cluster_size() const {
     return cluster_members_.size();
 }
 
-size_t RaftCore::pending_request_vote_count() const {
-    // Return how many outbound vote requests are waiting.
-    return pending_request_vote_actions_.size();
-}
-
-vector<RequestVoteAction>
-RaftCore::take_request_vote_actions() {
-    // Move the actions into a local vector.
-    vector<RequestVoteAction> actions{
-        move(pending_request_vote_actions_)
-    };
-
-    pending_request_vote_actions_.clear();
-
-    return actions;
-}
-
 const vector<LogEntry>& RaftCore::log_entries() const {
     return log_entries_;
 }
 
 uint64_t RaftCore::last_log_index() const {
-    // The vector size equals the logical index of the final entry.
+    // Vector size equals the final logical Raft index.
     return static_cast<uint64_t>(log_entries_.size());
 }
 
 uint64_t RaftCore::last_log_term() const {
-    // An empty log has the special last term zero.
     if (log_entries_.empty()) {
         return 0;
     }
@@ -222,7 +193,6 @@ uint64_t RaftCore::max_election_timeout_ms() const {
 }
 
 uint64_t RaftCore::election_timeout_ms() const {
-    // This is the timeout selected for the current interval.
     return election_timeout_ms_;
 }
 
@@ -231,7 +201,7 @@ uint64_t RaftCore::election_deadline_ms() const {
 }
 
 bool RaftCore::election_timeout_expired() const {
-    // Leaders do not start elections.
+    // Leaders do not begin new elections.
     if (role_ == NodeRole::leader) {
         return false;
     }
@@ -242,19 +212,25 @@ bool RaftCore::election_timeout_expired() const {
 void RaftCore::advance_time(
     const uint64_t elapsed_ms
 ) {
-    // Advance logical time without sleeping.
+    // Advance logical time without using sleep().
     current_time_ms_ += elapsed_ms;
 }
 
 bool RaftCore::tick(
     const uint64_t elapsed_ms
 ) {
-    advance_time(elapsed_ms) ;
+    // Advance deterministic time.
+    advance_time(elapsed_ms);
 
-    if (!election_timeout_expired()) return false ;
+    // Nothing happens before the deadline.
+    if (!election_timeout_expired()) {
+        return false;
+    }
 
-    start_election() ;
-    return true ;
+    // A follower or candidate starts a new election.
+    start_election();
+
+    return true;
 }
 
 void RaftCore::reset_election_deadline() {
@@ -267,32 +243,42 @@ void RaftCore::reset_election_deadline() {
     election_timeout_ms_ =
         timeout_distribution(random_engine_);
 
-    // Convert the duration into an absolute logical deadline.
+    // Convert the duration into an absolute deadline.
     election_deadline_ms_ =
         current_time_ms_ + election_timeout_ms_;
 }
 
 size_t RaftCore::majority_size() const {
-    // Three nodes require two votes.
-    // Five nodes require three votes.
     return cluster_size() / 2 + 1;
 }
 
-void RaftCore::queue_request_vote_actions() {
-    // Remove any requests left from an older election.
-    //
-    // Requests from an older term must not be delivered as part
-    // of the new election.
+size_t RaftCore::pending_request_vote_count() const {
+    return pending_request_vote_actions_.size();
+}
+
+vector<RequestVoteAction>
+RaftCore::take_request_vote_actions() {
+    // Move actions out so they are not copied.
+    vector<RequestVoteAction> actions{
+        std::move(pending_request_vote_actions_)
+    };
+
+    // Keep the moved-from queue explicitly empty.
     pending_request_vote_actions_.clear();
 
-    // Create one snapshot of the current vote request.
+    return actions;
+}
+
+void RaftCore::queue_request_vote_actions() {
+    // Remove messages belonging to an older election.
+    pending_request_vote_actions_.clear();
+
+    // Capture one consistent request for this election.
     const RequestVoteRequest request =
         make_request_vote_request();
 
-    // Create one outbound action for every other cluster member.
     for (const string& member_id : cluster_members_) {
         // The candidate already voted for itself.
-        // It does not send a network request to itself.
         if (member_id == node_id_) {
             continue;
         }
@@ -307,30 +293,29 @@ void RaftCore::queue_request_vote_actions() {
 }
 
 void RaftCore::start_election() {
-    // Every new election starts in a new term.
+    // Every election starts in a newer term.
     ++current_term_;
 
-    // The node becomes a candidate.
     role_ = NodeRole::candidate;
 
-    // Discard votes from an older election.
+    // Remove votes from the previous election.
     votes_received_.clear();
 
-    // The candidate votes for itself.
+    // A candidate always votes for itself.
     voted_for_ = node_id_;
     votes_received_.insert(node_id_);
 
-    // Select a fresh timeout for this election.
+    // Select a fresh timeout.
     reset_election_deadline();
 
-    // Create outbound vote requests for every other node.
+    // Queue requests for every other cluster member.
     queue_request_vote_actions();
 
     // A one-node cluster already has a majority.
     if (votes_received() >= majority_size()) {
         role_ = NodeRole::leader;
 
-        // A leader no longer needs election requests.
+        // No vote requests are needed after becoming leader.
         pending_request_vote_actions_.clear();
     }
 }
@@ -357,7 +342,7 @@ bool RaftCore::candidate_log_is_up_to_date(
     const uint64_t candidate_last_log_index,
     const uint64_t candidate_last_log_term
 ) const {
-    // Compare final log terms before comparing indexes.
+    // Compare final terms before comparing indexes.
     if (candidate_last_log_term > last_log_term()) {
         return true;
     }
@@ -366,8 +351,7 @@ bool RaftCore::candidate_log_is_up_to_date(
         return false;
     }
 
-    // If terms match, the candidate must have at least as
-    // many entries as this node.
+    // When terms match, the candidate needs at least as many entries.
     return candidate_last_log_index >= last_log_index();
 }
 
@@ -375,13 +359,13 @@ RequestVoteResponse
 RaftCore::handle_request_vote(
     const RequestVoteRequest& request
 ) {
-    // Begin with a rejected response.
+    // Reject by default.
     RequestVoteResponse response{
         current_term_,
         false
     };
 
-    // Reject unknown candidates.
+    // Reject requests from unknown nodes.
     if (
         cluster_members_.find(request.candidate_id) ==
         cluster_members_.end()
@@ -389,17 +373,16 @@ RaftCore::handle_request_vote(
         return response;
     }
 
-    // Reject requests from older terms.
+    // Reject stale election terms.
     if (request.term < current_term_) {
         return response;
     }
 
-    // Adopt a newer term before evaluating the vote.
+    // Adopt a newer term before evaluating the request.
     if (request.term > current_term_) {
         become_follower(request.term);
     }
 
-    // become_follower() may have changed the current term.
     response.term = current_term_;
 
     const bool has_not_voted =
@@ -409,11 +392,10 @@ RaftCore::handle_request_vote(
         voted_for_.has_value() &&
         voted_for_.value() == request.candidate_id;
 
-    const bool can_vote =
-        has_not_voted ||
-        already_voted_for_candidate;
-
-    if (!can_vote) {
+    if (
+        !has_not_voted &&
+        !already_voted_for_candidate
+    ) {
         return response;
     }
 
@@ -427,9 +409,10 @@ RaftCore::handle_request_vote(
         return response;
     }
 
-    // All vote conditions passed.
+    // Record the vote and start a fresh waiting interval.
     voted_for_ = request.candidate_id;
     reset_election_deadline();
+
     response.vote_granted = true;
 
     return response;
@@ -449,7 +432,7 @@ void RaftCore::receive_vote(
         };
     }
 
-    // A higher response term makes this candidate outdated.
+    // A newer response term makes this candidate outdated.
     if (response.term > current_term_) {
         become_follower(response.term);
         return;
@@ -469,15 +452,15 @@ void RaftCore::receive_vote(
         return;
     }
 
-    // The set prevents duplicate vote counting.
+    // The set prevents duplicate votes from being counted twice.
     votes_received_.insert(voter_id);
 
     if (votes_received() >= majority_size()) {
-    role_ = NodeRole::leader;
+        role_ = NodeRole::leader;
 
-    // Do not send additional election requests after becoming leader.
-    pending_request_vote_actions_.clear();
-}
+        // Stop sending election requests after becoming leader.
+        pending_request_vote_actions_.clear();
+    }
 }
 
 void RaftCore::become_follower(
@@ -495,9 +478,8 @@ void RaftCore::become_follower(
     // The node has not voted in the new term.
     voted_for_.reset();
 
-    // Old election votes are no longer useful.
+    // Previous election state is no longer valid.
     votes_received_.clear();
-
     pending_request_vote_actions_.clear();
 }
 
