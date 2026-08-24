@@ -21,9 +21,6 @@ using std::vector;
 class InMemoryCluster {
 public:
     // Create one RaftCore object for every supplied node ID.
-    //
-    // All nodes receive the same cluster membership, but each node
-    // receives a different random seed for its election timer.
     explicit InMemoryCluster(
         vector<string> node_ids,
         uint64_t min_election_timeout_ms = 150,
@@ -32,34 +29,36 @@ public:
     );
 
     // Find a node that may be modified.
-    //
-    // This version is used when the caller needs to start an election
-    // or otherwise change the node.
     [[nodiscard]]
     RaftCore& node(const string& node_id);
 
     // Find a read-only node.
-    //
-    // This version is useful when inspecting cluster state in tests.
     [[nodiscard]]
     const RaftCore& node(const string& node_id) const;
 
-    // Start an election and deliver all vote requests created by it.
+    // Start an election and deliver its vote requests.
     //
-    // The return value tells us how many requests were delivered.
+    // If the candidate wins, its initial heartbeats are also delivered.
     [[nodiscard]]
     size_t start_election(const string& candidate_node_id);
 
-    // Deliver the vote requests currently waiting on one node.
-    //
-    // This is public so future tests can separate message creation
-    // from message delivery.
+    // Deliver pending vote requests from one candidate.
     [[nodiscard]]
     size_t deliver_request_vote_actions(
         const string& candidate_node_id
     );
 
-    // Return the number of nodes in the simulated cluster.
+    // Queue and deliver a fresh heartbeat from the leader.
+    [[nodiscard]]
+    size_t send_heartbeats(const string& leader_node_id);
+
+    // Deliver heartbeats already waiting in the leader's queue.
+    [[nodiscard]]
+    size_t deliver_append_entries_actions(
+        const string& leader_node_id
+    );
+
+    // Return the number of nodes in the cluster.
     [[nodiscard]]
     size_t size() const;
 

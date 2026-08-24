@@ -304,6 +304,8 @@ void RaftCore::start_election() {
 
     leader_id_.reset() ;
 
+    pending_append_entries_actions_.clear() ;
+
     // Remove votes from the previous election.
     votes_received_.clear();
 
@@ -325,6 +327,8 @@ void RaftCore::start_election() {
 
         // No vote requests are needed after becoming leader.
         pending_request_vote_actions_.clear();
+
+        queue_heartbeat_actions() ;
     }
 }
 
@@ -363,6 +367,87 @@ RaftCore::make_heartbeat_request() const {
     request.prev_log_term = last_log_term();
 
     return request;
+}
+
+void RaftCore::queue_heartbeat_actions() {
+    // Only the elected leader may create heartbeat actions.
+    if (role_ != NodeRole::leader) {
+        throw logic_error{
+            "Only a leader can queue heartbeat actions"
+        };
+    }
+
+    // Remove any older heartbeat actions that were not delivered.
+    pending_append_entries_actions_.clear();
+
+    // Every follower receives the same heartbeat for now.
+    const AppendEntriesRequest heartbeat =
+        make_heartbeat_request();
+
+    for (const string& member_id : cluster_members_) {
+        // A leader does not send a heartbeat to itself.
+        if (member_id == node_id_) {
+            continue;
+        }
+
+        pending_append_entries_actions_.push_back(
+            AppendEntriesAction{
+                member_id,
+                heartbeat
+            }
+        );
+    }
+}
+
+size_t RaftCore::pending_append_entries_count() const {
+    return pending_append_entries_actions_.size();
+}
+
+vector<AppendEntriesAction>
+RaftCore::take_append_entries_actions() {
+    vector<AppendEntriesAction> actions;
+
+    // swap() transfers the queue without copying every action.
+    actions.swap(pending_append_entries_actions_);
+
+    return actions;
+}
+
+void RaftCore::receive_append_entries_response(
+    const string& follower_id,
+    const AppendEntriesResponse& response
+) {
+    // Responses are accepted only from known cluster members.
+    if (
+        cluster_members_.find(follower_id) ==
+        cluster_members_.end()
+    ) {
+        throw invalid_argument{
+            "Received AppendEntries response from unknown member"
+        };
+    }
+
+    // A newer term proves that this node is no longer the leader.
+    if (response.term > current_term_) {
+        become_follower(response.term);
+        return;
+    }
+
+    // Ignore responses from older terms.
+    if (response.term < current_term_) {
+        return;
+    }
+
+    // Only a leader processes current-term AppendEntries responses.
+    if (role_ != NodeRole::leader) {
+        return;
+    }
+
+    // For heartbeat-only messages, no additional work is required.
+    //
+    // Later, success and failure will update next_index and
+    // match_index during log replication.
+    static_cast<void>(response.success);
 }
 
 bool RaftCore::candidate_log_is_up_to_date(
@@ -505,6 +590,7 @@ RaftCore::handle_append_entries(
         role_ = NodeRole::follower;
         votes_received_.clear();
         pending_request_vote_actions_.clear();
+        pending_append_entries_actions_.clear();
     }
 
     // The term may have changed after becoming a follower.
@@ -576,6 +662,8 @@ void RaftCore::receive_vote(
 
         // Stop sending election requests after becoming leader.
         pending_request_vote_actions_.clear();
+
+        queue_heartbeat_actions() ;
     }
 }
 
@@ -599,6 +687,7 @@ void RaftCore::become_follower(
     // Previous election state is no longer valid.
     votes_received_.clear();
     pending_request_vote_actions_.clear();
+    pending_append_entries_actions_.clear() ;
 }
 
 }  // namespace miniraft

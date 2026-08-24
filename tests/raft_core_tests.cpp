@@ -6,6 +6,8 @@
 #include <vector>
 
 // MiniRaft types used by the tests.
+using miniraft::AppendEntriesAction;
+using miniraft::AppendEntriesResponse;
 using miniraft::AppendEntriesRequest;
 using miniraft::LogEntry;
 using miniraft::NodeRole;
@@ -1858,6 +1860,239 @@ void test_unknown_heartbeat_sender_is_rejected() {
     );
 }
 
+void test_leader_queues_heartbeat_for_each_follower() {
+    RaftCore leader{
+        "node-1",
+        three_node_cluster(),
+        0,
+        {},
+        100,
+        100,
+        1
+    };
+
+    leader.start_election();
+
+    // The self-vote plus node 2's vote creates a majority.
+    leader.receive_vote(
+        "node-2",
+        RequestVoteResponse{
+            1,
+            true
+        }
+    );
+
+    expect(
+        leader.role() == NodeRole::leader,
+        "Candidate becomes leader before queuing heartbeats"
+    );
+
+    expect(
+        leader.pending_append_entries_count() == 2,
+        "New leader queues one heartbeat per follower"
+    );
+
+    const vector<AppendEntriesAction> actions =
+        leader.take_append_entries_actions();
+
+    bool contains_node_2 = false;
+    bool contains_node_3 = false;
+    bool contains_leader = false;
+    bool all_actions_are_current = true;
+
+    for (const AppendEntriesAction& action : actions) {
+        if (action.target_node_id == "node-2") {
+            contains_node_2 = true;
+        }
+
+        if (action.target_node_id == "node-3") {
+            contains_node_3 = true;
+        }
+
+        if (action.target_node_id == "node-1") {
+            contains_leader = true;
+        }
+
+        if (
+            action.request.term != 1 ||
+            action.request.leader_id != "node-1"
+        ) {
+            all_actions_are_current = false;
+        }
+    }
+
+    expect(
+        actions.size() == 2,
+        "Three-node leader creates exactly two heartbeat actions"
+    );
+
+    expect(
+        contains_node_2,
+        "Heartbeat queue contains node 2"
+    );
+
+    expect(
+        contains_node_3,
+        "Heartbeat queue contains node 3"
+    );
+
+    expect(
+        !contains_leader,
+        "Leader does not send a heartbeat to itself"
+    );
+
+    expect(
+        all_actions_are_current,
+        "Every heartbeat contains the current leader and term"
+    );
+}
+
+void test_taking_heartbeat_actions_clears_queue() {
+    RaftCore leader{
+        "node-1",
+        three_node_cluster()
+    };
+
+    leader.start_election();
+
+    leader.receive_vote(
+        "node-2",
+        RequestVoteResponse{
+            1,
+            true
+        }
+    );
+
+    const vector<AppendEntriesAction> first_actions =
+        leader.take_append_entries_actions();
+
+    const vector<AppendEntriesAction> second_actions =
+        leader.take_append_entries_actions();
+
+    expect(
+        first_actions.size() == 2,
+        "First take returns queued heartbeat actions"
+    );
+
+    expect(
+        leader.pending_append_entries_count() == 0,
+        "Taking heartbeat actions clears the internal queue"
+    );
+
+    expect(
+        second_actions.empty(),
+        "Taking from an empty heartbeat queue returns no actions"
+    );
+}
+
+void test_follower_cannot_queue_heartbeats() {
+    RaftCore follower{
+        "node-1",
+        three_node_cluster()
+    };
+
+    bool exception_was_thrown = false;
+
+    try {
+        follower.queue_heartbeat_actions();
+    } catch (const logic_error&) {
+        exception_was_thrown = true;
+    }
+
+    expect(
+        exception_was_thrown,
+        "Follower cannot queue heartbeat actions"
+    );
+}
+
+void test_higher_term_heartbeat_response_stops_leader() {
+    RaftCore leader{
+        "node-1",
+        three_node_cluster()
+    };
+
+    leader.start_election();
+
+    leader.receive_vote(
+        "node-2",
+        RequestVoteResponse{
+            1,
+            true
+        }
+    );
+
+    expect(
+        leader.pending_append_entries_count() == 2,
+        "Leader has pending heartbeats before stepping down"
+    );
+
+    const AppendEntriesResponse newer_response{
+        2,
+        false
+    };
+
+    leader.receive_append_entries_response(
+        "node-3",
+        newer_response
+    );
+
+    expect(
+        leader.role() == NodeRole::follower,
+        "Higher-term heartbeat response makes leader step down"
+    );
+
+    expect(
+        leader.current_term() == 2,
+        "Former leader adopts the newer term"
+    );
+
+    expect(
+        !leader.leader_id().has_value(),
+        "Former leader no longer recognizes itself as leader"
+    );
+
+    expect(
+        leader.pending_append_entries_count() == 0,
+        "Stepping down clears stale heartbeat actions"
+    );
+}
+
+void test_unknown_heartbeat_response_is_rejected() {
+    RaftCore leader{
+        "node-1",
+        three_node_cluster()
+    };
+
+    leader.start_election();
+
+    leader.receive_vote(
+        "node-2",
+        RequestVoteResponse{
+            1,
+            true
+        }
+    );
+
+    bool exception_was_thrown = false;
+
+    try {
+        leader.receive_append_entries_response(
+            "node-99",
+            AppendEntriesResponse{
+                1,
+                true
+            }
+        );
+    } catch (const invalid_argument&) {
+        exception_was_thrown = true;
+    }
+
+    expect(
+        exception_was_thrown,
+        "Heartbeat response from unknown node is rejected"
+    );
+}
+
 }  // namespace
 
 int main() {
@@ -1913,6 +2148,33 @@ int main() {
     test_new_election_replaces_old_actions();
     test_one_node_cluster_creates_no_vote_requests();
     test_stepping_down_clears_vote_requests();
+
+    // AppendEntries heartbeat behavior.
+test_only_leader_can_create_heartbeat();
+test_leader_creates_heartbeat();
+test_follower_accepts_valid_heartbeat();
+test_valid_heartbeat_resets_election_timer();
+test_stale_heartbeat_is_rejected();
+test_candidate_steps_down_for_heartbeat();
+test_heartbeat_rejects_mismatched_log();
+test_unknown_heartbeat_sender_is_rejected();
+
+// AppendEntries heartbeat handling.
+test_only_leader_can_create_heartbeat();
+test_leader_creates_heartbeat();
+test_follower_accepts_valid_heartbeat();
+test_valid_heartbeat_resets_election_timer();
+test_stale_heartbeat_is_rejected();
+test_candidate_steps_down_for_heartbeat();
+test_heartbeat_rejects_mismatched_log();
+test_unknown_heartbeat_sender_is_rejected();
+
+// Outbound AppendEntries heartbeat actions.
+test_leader_queues_heartbeat_for_each_follower();
+test_taking_heartbeat_actions_clears_queue();
+test_follower_cannot_queue_heartbeats();
+test_higher_term_heartbeat_response_stops_leader();
+test_unknown_heartbeat_response_is_rejected();
 
     if (failure_count == 0) {
         cout << "\nAll Raft core tests passed.\n";

@@ -94,6 +94,12 @@ struct AppendEntriesResponse
     bool success {false} ; // true when the leader's prev log position matches
 };
 
+struct AppendEntriesAction {
+    string target_node_id ;
+
+    AppendEntriesRequest request ;
+};
+
 
 class RaftCore {
 public:
@@ -169,6 +175,23 @@ public:
     AppendEntriesResponse handle_append_entries(
         const AppendEntriesRequest& request
     );
+
+    // Create one heartbeat action for every other cluster member.
+void queue_heartbeat_actions();
+
+// Return the number of heartbeats waiting for delivery.
+[[nodiscard]]
+size_t pending_append_entries_count() const;
+
+// Return all pending heartbeats and empty the queue.
+[[nodiscard]]
+vector<AppendEntriesAction> take_append_entries_actions();
+
+// Process a response returned by a follower.
+void receive_append_entries_response(
+    const string& follower_id,
+    const AppendEntriesResponse& response
+);
 
     // Inspect the number of outbound vote requests.
     [[nodiscard]]
@@ -247,6 +270,9 @@ private:
 
     // Vote requests waiting for delivery.
     vector<RequestVoteAction> pending_request_vote_actions_;
+
+    // AppendEntries heartbeats waiting for delivery.
+    vector<AppendEntriesAction> pending_append_entries_actions_;
 };
 
 }  // namespace miniraft

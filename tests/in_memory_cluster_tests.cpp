@@ -15,6 +15,7 @@ using std::cout;
 using std::invalid_argument;
 using std::string;
 using std::vector;
+using std::logic_error;
 
 namespace {
 
@@ -232,6 +233,119 @@ void test_unknown_node_is_rejected() {
     );
 }
 
+void test_election_delivers_initial_heartbeats() {
+    InMemoryCluster cluster{
+        three_node_cluster(),
+        100,
+        100,
+        1
+    };
+
+    const auto delivered_vote_requests =
+        cluster.start_election("node-1");
+
+    static_cast<void>(delivered_vote_requests);
+
+    expect(
+        cluster.node("node-1").role() == NodeRole::leader,
+        "Node 1 becomes leader before heartbeat delivery"
+    );
+
+    expect(
+        cluster.node("node-2").leader_id().value_or("") ==
+            "node-1",
+        "Initial heartbeat tells node 2 about the leader"
+    );
+
+    expect(
+        cluster.node("node-3").leader_id().value_or("") ==
+            "node-1",
+        "Initial heartbeat tells node 3 about the leader"
+    );
+
+    expect(
+        cluster.node("node-1").pending_append_entries_count() == 0,
+        "Initial heartbeat actions are delivered and cleared"
+    );
+}
+
+void test_repeated_heartbeats_reset_follower_timers() {
+    InMemoryCluster cluster{
+        three_node_cluster(),
+        100,
+        100,
+        1
+    };
+
+    const auto delivered_vote_requests =
+        cluster.start_election("node-1");
+
+    static_cast<void>(delivered_vote_requests);
+
+    // Move both followers close to their election deadlines.
+    cluster.node("node-2").advance_time(90);
+    cluster.node("node-3").advance_time(90);
+
+    expect(
+        cluster.node("node-2").election_deadline_ms() == 100,
+        "Node 2 is close to its original election deadline"
+    );
+
+    expect(
+        cluster.node("node-3").election_deadline_ms() == 100,
+        "Node 3 is close to its original election deadline"
+    );
+
+    const auto delivered_heartbeats =
+        cluster.send_heartbeats("node-1");
+
+    expect(
+        delivered_heartbeats == 2,
+        "Leader sends one fresh heartbeat to each follower"
+    );
+
+    expect(
+        cluster.node("node-2").election_deadline_ms() == 190,
+        "Heartbeat gives node 2 a fresh waiting interval"
+    );
+
+    expect(
+        cluster.node("node-3").election_deadline_ms() == 190,
+        "Heartbeat gives node 3 a fresh waiting interval"
+    );
+
+    expect(
+        !cluster.node("node-2").election_timeout_expired(),
+        "Node 2 does not begin an election after heartbeat"
+    );
+
+    expect(
+        !cluster.node("node-3").election_timeout_expired(),
+        "Node 3 does not begin an election after heartbeat"
+    );
+}
+
+void test_non_leader_cannot_send_heartbeats() {
+    InMemoryCluster cluster{
+        three_node_cluster()
+    };
+
+    bool exception_was_thrown = false;
+
+    try {
+        static_cast<void>(
+            cluster.send_heartbeats("node-2")
+        );
+    } catch (const logic_error&) {
+        exception_was_thrown = true;
+    }
+
+    expect(
+        exception_was_thrown,
+        "Simulator rejects heartbeat request from non-leader"
+    );
+}
+
 }  // namespace
 
 int main() {
@@ -242,6 +356,11 @@ int main() {
     test_newer_election_replaces_old_leader();
     test_one_node_cluster_elects_itself();
     test_unknown_node_is_rejected();
+
+    // Heartbeat delivery between simulated nodes.
+test_election_delivers_initial_heartbeats();
+test_repeated_heartbeats_reset_follower_timers();
+test_non_leader_cannot_send_heartbeats();
 
     if (failure_count == 0) {
         cout << "\nAll in-memory cluster tests passed.\n";
