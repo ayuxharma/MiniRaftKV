@@ -563,7 +563,8 @@ RaftCore::handle_append_entries(
     // Reject the heartbeat unless every required check succeeds.
     AppendEntriesResponse response{
         current_term_,
-        false
+        false,
+        0
     };
 
     // Ignore messages claiming to come from an unknown node.
@@ -613,9 +614,52 @@ RaftCore::handle_append_entries(
         return response;
     }
 
-    response.success = true;
+    uint64_t previous_entry_term = request.prev_log_term ;
 
-    return response;
+    for (const LogEntry& entry : request.entries) {
+        if (entry.term == 0) return response ;
+        if (entry.command.empty()) return response ;
+        if (entry.term > request.term) return response ;
+        if (entry.term < previous_entry_term) return response ;
+
+        previous_entry_term = entry.term ;
+    }
+
+    size_t incoming_offset = 0 ;
+
+    while (incoming_offset < request.entries.size()) {
+        const uint64_t logical_index = 
+            request.prev_log_index + static_cast<uint64_t>(incoming_offset) + 1 ;
+
+        const size_t vector_index = 
+            static_cast<size_t>(logical_index - 1) ;
+
+        if (vector_index >= log_entries_.size()) break ;
+
+        const LogEntry& existing_entry = log_entries_[vector_index] ;
+
+        const LogEntry& incoming_entry = request.entries[incoming_offset] ;
+
+        if (existing_entry.term != incoming_entry.term) {
+            log_entries_.resize(vector_index) ;
+            break ;
+        }
+
+        ++incoming_offset ;
+    }
+
+    while (incoming_offset < request.entries.size()) {
+        log_entries_.push_back(request.entries[incoming_offset]) ;
+        ++incoming_offset ;
+    }
+
+    response.success = true ;
+
+    response.matched_index = request.prev_log_index + static_cast<uint64_t>(request.entries.size()) ;
+
+    static_cast<void> (request.leader_commit) ;
+
+    return response ;
 }
 
 void RaftCore::receive_vote(

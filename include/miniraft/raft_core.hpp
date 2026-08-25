@@ -85,6 +85,9 @@ struct AppendEntriesRequest {
     uint64_t prev_log_index {0} ; // log position immediately before any new entries
 
     uint64_t prev_log_term {0} ; // term stored at prev_log_index
+
+    vector<LogEntry> entries ;
+    uint64_t leader_commit{0} ;  // Highest log index known to be committed by the leader.
 } ;
 
 struct AppendEntriesResponse
@@ -92,6 +95,8 @@ struct AppendEntriesResponse
     uint64_t term {0} ; // responder's current term
 
     bool success {false} ; // true when the leader's prev log position matches
+
+    uint64_t matched_index{0} ; // Highest logical index verified by this request. Leaders will later use this to update match_index.
 };
 
 struct AppendEntriesAction {

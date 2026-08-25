@@ -2093,6 +2093,387 @@ void test_unknown_heartbeat_response_is_rejected() {
     );
 }
 
+void test_follower_appends_entries_to_empty_log() {
+    RaftCore follower{
+        "node-2",
+        three_node_cluster(),
+        0,
+        {},
+        100,
+        100,
+        1
+    };
+
+    const AppendEntriesRequest request{
+        1,
+        "node-1",
+        0,
+        0,
+        {
+            LogEntry{1, "UPDATE notes.txt VERSION 1"},
+            LogEntry{1, "UPDATE photo.jpg VERSION 1"}
+        },
+        0
+    };
+
+    const auto response =
+        follower.handle_append_entries(request);
+
+    expect(
+        response.success,
+        "Follower accepts entries after matching empty history"
+    );
+
+    expect(
+        response.matched_index == 2,
+        "Response reports both appended entries as matched"
+    );
+
+    expect(
+        follower.log_entries().size() == 2,
+        "Follower appends both entries"
+    );
+
+    expect(
+        follower.log_entries()[0].command ==
+            "UPDATE notes.txt VERSION 1",
+        "Follower stores the first command"
+    );
+
+    expect(
+        follower.log_entries()[1].command ==
+            "UPDATE photo.jpg VERSION 1",
+        "Follower stores the second command"
+    );
+}
+
+void test_matching_entries_are_not_duplicated() {
+    const vector<LogEntry> existing_log{
+        LogEntry{1, "UPDATE notes.txt VERSION 1"},
+        LogEntry{2, "UPDATE notes.txt VERSION 2"}
+    };
+
+    RaftCore follower{
+        "node-2",
+        three_node_cluster(),
+        2,
+        existing_log,
+        100,
+        100,
+        1
+    };
+
+    const AppendEntriesRequest request{
+        2,
+        "node-1",
+        0,
+        0,
+        {
+            LogEntry{1, "UPDATE notes.txt VERSION 1"},
+            LogEntry{2, "UPDATE notes.txt VERSION 2"}
+        },
+        0
+    };
+
+    const auto response =
+        follower.handle_append_entries(request);
+
+    expect(
+        response.success,
+        "Follower accepts entries that already match"
+    );
+
+    expect(
+        follower.log_entries().size() == 2,
+        "Matching entries are not appended twice"
+    );
+
+    expect(
+        response.matched_index == 2,
+        "Already stored entries are reported as matched"
+    );
+}
+
+void test_follower_appends_only_missing_suffix() {
+    const vector<LogEntry> existing_log{
+        LogEntry{1, "UPDATE notes.txt VERSION 1"},
+        LogEntry{2, "UPDATE notes.txt VERSION 2"}
+    };
+
+    RaftCore follower{
+        "node-2",
+        three_node_cluster(),
+        3,
+        existing_log,
+        100,
+        100,
+        1
+    };
+
+    const AppendEntriesRequest request{
+        3,
+        "node-1",
+        1,
+        1,
+        {
+            LogEntry{2, "UPDATE notes.txt VERSION 2"},
+            LogEntry{3, "UPDATE notes.txt VERSION 3"}
+        },
+        0
+    };
+
+    const auto response =
+        follower.handle_append_entries(request);
+
+    expect(
+        response.success,
+        "Follower accepts matching prefix and missing suffix"
+    );
+
+    expect(
+        follower.log_entries().size() == 3,
+        "Follower appends only the missing entry"
+    );
+
+    expect(
+        follower.log_entries()[2].term == 3,
+        "Missing entry keeps the leader's term"
+    );
+
+    expect(
+        follower.log_entries()[2].command ==
+            "UPDATE notes.txt VERSION 3",
+        "Missing command is appended at the correct position"
+    );
+
+    expect(
+        response.matched_index == 3,
+        "Response reports the complete replicated suffix"
+    );
+}
+
+void test_follower_removes_conflicting_suffix() {
+    const vector<LogEntry> conflicting_log{
+        LogEntry{1, "UPDATE notes.txt VERSION 1"},
+        LogEntry{2, "OLD UNCOMMITTED COMMAND"},
+        LogEntry{2, "ANOTHER OLD COMMAND"}
+    };
+
+    RaftCore follower{
+        "node-2",
+        three_node_cluster(),
+        3,
+        conflicting_log,
+        100,
+        100,
+        1
+    };
+
+    const AppendEntriesRequest request{
+        3,
+        "node-1",
+        1,
+        1,
+        {
+            LogEntry{3, "UPDATE notes.txt VERSION 2"},
+            LogEntry{3, "UPDATE notes.txt VERSION 3"}
+        },
+        0
+    };
+
+    const auto response =
+        follower.handle_append_entries(request);
+
+    expect(
+        response.success,
+        "Follower accepts leader entries after conflict repair"
+    );
+
+    expect(
+        follower.log_entries().size() == 3,
+        "Conflicting suffix is replaced by leader suffix"
+    );
+
+    expect(
+        follower.log_entries()[0].term == 1,
+        "Matching prefix remains unchanged"
+    );
+
+    expect(
+        follower.log_entries()[1].term == 3,
+        "First conflicting entry is replaced"
+    );
+
+    expect(
+        follower.log_entries()[1].command ==
+            "UPDATE notes.txt VERSION 2",
+        "Leader command replaces old conflicting command"
+    );
+
+    expect(
+        follower.log_entries()[2].command ==
+            "UPDATE notes.txt VERSION 3",
+        "Entries after the conflict are replaced"
+    );
+
+    expect(
+        response.matched_index == 3,
+        "Conflict repair reports the new matched index"
+    );
+}
+
+void test_previous_log_mismatch_preserves_log() {
+    const vector<LogEntry> existing_log{
+        LogEntry{1, "UPDATE notes.txt VERSION 1"},
+        LogEntry{2, "UPDATE notes.txt VERSION 2"}
+    };
+
+    RaftCore follower{
+        "node-2",
+        three_node_cluster(),
+        3,
+        existing_log,
+        100,
+        100,
+        1
+    };
+
+    const AppendEntriesRequest request{
+        3,
+        "node-1",
+        2,
+        1,
+        {
+            LogEntry{3, "UPDATE notes.txt VERSION 3"}
+        },
+        0
+    };
+
+    const auto response =
+        follower.handle_append_entries(request);
+
+    expect(
+        !response.success,
+        "Follower rejects mismatched previous log term"
+    );
+
+    expect(
+        response.matched_index == 0,
+        "Rejected request does not report a matched index"
+    );
+
+    expect(
+        follower.log_entries().size() == 2,
+        "Rejected request does not change log size"
+    );
+
+    expect(
+        follower.log_entries()[1].term == 2,
+        "Rejected request preserves existing log terms"
+    );
+
+    expect(
+        follower.log_entries()[1].command ==
+            "UPDATE notes.txt VERSION 2",
+        "Rejected request preserves existing commands"
+    );
+}
+
+void test_invalid_entry_batch_is_atomic() {
+    const vector<LogEntry> existing_log{
+        LogEntry{1, "UPDATE notes.txt VERSION 1"}
+    };
+
+    RaftCore follower{
+        "node-2",
+        three_node_cluster(),
+        2,
+        existing_log,
+        100,
+        100,
+        1
+    };
+
+    const AppendEntriesRequest request{
+        2,
+        "node-1",
+        1,
+        1,
+        {
+            LogEntry{2, "UPDATE notes.txt VERSION 2"},
+
+            // Term zero makes the complete batch invalid.
+            LogEntry{0, "INVALID ENTRY"}
+        },
+        0
+    };
+
+    const auto response =
+        follower.handle_append_entries(request);
+
+    expect(
+        !response.success,
+        "Follower rejects a batch containing an invalid entry"
+    );
+
+    expect(
+        follower.log_entries().size() == 1,
+        "Invalid batch does not append its valid prefix"
+    );
+
+    expect(
+        follower.log_entries()[0].command ==
+            "UPDATE notes.txt VERSION 1",
+        "Invalid batch leaves the original log unchanged"
+    );
+}
+
+void test_matched_index_covers_only_request_history() {
+    const vector<LogEntry> existing_log{
+        LogEntry{1, "UPDATE notes.txt VERSION 1"},
+        LogEntry{2, "UNVERIFIED ENTRY 2"},
+        LogEntry{3, "UNVERIFIED ENTRY 3"}
+    };
+
+    RaftCore follower{
+        "node-2",
+        three_node_cluster(),
+        3,
+        existing_log,
+        100,
+        100,
+        1
+    };
+
+    // This heartbeat verifies only index 1.
+    const AppendEntriesRequest request{
+        3,
+        "node-1",
+        1,
+        1,
+        {},
+        0
+    };
+
+    const auto response =
+        follower.handle_append_entries(request);
+
+    expect(
+        response.success,
+        "Follower accepts heartbeat with matching history"
+    );
+
+    expect(
+        follower.last_log_index() == 3,
+        "Heartbeat does not remove unrelated later entries"
+    );
+
+    expect(
+        response.matched_index == 1,
+        "Response reports only the index verified by request"
+    );
+}
+
 }  // namespace
 
 int main() {
@@ -2149,16 +2530,6 @@ int main() {
     test_one_node_cluster_creates_no_vote_requests();
     test_stepping_down_clears_vote_requests();
 
-    // AppendEntries heartbeat behavior.
-test_only_leader_can_create_heartbeat();
-test_leader_creates_heartbeat();
-test_follower_accepts_valid_heartbeat();
-test_valid_heartbeat_resets_election_timer();
-test_stale_heartbeat_is_rejected();
-test_candidate_steps_down_for_heartbeat();
-test_heartbeat_rejects_mismatched_log();
-test_unknown_heartbeat_sender_is_rejected();
-
 // AppendEntries heartbeat handling.
 test_only_leader_can_create_heartbeat();
 test_leader_creates_heartbeat();
@@ -2175,6 +2546,15 @@ test_taking_heartbeat_actions_clears_queue();
 test_follower_cannot_queue_heartbeats();
 test_higher_term_heartbeat_response_stops_leader();
 test_unknown_heartbeat_response_is_rejected();
+
+// Follower-side log replication.
+test_follower_appends_entries_to_empty_log();
+test_matching_entries_are_not_duplicated();
+test_follower_appends_only_missing_suffix();
+test_follower_removes_conflicting_suffix();
+test_previous_log_mismatch_preserves_log();
+test_invalid_entry_batch_is_atomic();
+test_matched_index_covers_only_request_history();
 
     if (failure_count == 0) {
         cout << "\nAll Raft core tests passed.\n";
