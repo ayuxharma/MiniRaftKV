@@ -6,7 +6,9 @@
 #include <vector>
 
 // MiniRaft types used in these tests.
+using miniraft::AppendEntriesRequest;
 using miniraft::InMemoryCluster;
+using miniraft::LogEntry;
 using miniraft::NodeRole;
 
 // Standard-library names used in these tests.
@@ -42,6 +44,37 @@ vector<string> three_node_cluster() {
         "node-2",
         "node-3"
     };
+}
+
+// Give node 1 an existing log before it starts its election.
+//
+// This creates a realistic situation where the future leader
+// contains entries that the other nodes do not have yet.
+void seed_node_one_log(
+    InMemoryCluster& cluster
+) {
+    const AppendEntriesRequest request{
+        1,
+        "node-2",
+        0,
+        0,
+        {
+            LogEntry{1, "COMMAND 1"},
+            LogEntry{1, "COMMAND 2"},
+            LogEntry{1, "COMMAND 3"}
+        },
+        0
+    };
+
+    const auto response =
+        cluster.node("node-1").handle_append_entries(
+            request
+        );
+
+    expect(
+        response.success,
+        "Node 1 receives its initial three log entries"
+    );
 }
 
 void test_cluster_creates_all_nodes_as_followers() {
@@ -343,6 +376,128 @@ void test_non_leader_cannot_send_heartbeats() {
     expect(
         exception_was_thrown,
         "Simulator rejects heartbeat request from non-leader"
+    );
+}
+
+void test_retries_until_followers_catch_up() {
+    InMemoryCluster cluster{
+        three_node_cluster()
+    };
+
+    seed_node_one_log(cluster);
+
+    expect(
+        cluster.node("node-1").last_log_index() == 3,
+        "Future leader starts with three log entries"
+    );
+
+    expect(
+        cluster.node("node-2").last_log_index() == 0,
+        "Node 2 starts without the leader's entries"
+    );
+
+    const auto delivered_vote_requests =
+        cluster.start_election("node-1");
+
+    static_cast<void>(delivered_vote_requests);
+
+    expect(
+        cluster.node("node-1").role() == NodeRole::leader,
+        "Node 1 becomes leader with the newer log"
+    );
+
+    // The initial AppendEntries sent after the election is rejected.
+    // The leader initially assumes that followers already have
+    // entries 1 through 3, so it must move next_index backward.
+    expect(
+        cluster.node("node-2").last_log_index() == 0,
+        "Follower rejects the leader's first optimistic request"
+    );
+
+    const bool caught_up =
+        cluster.replicate_until_caught_up(
+            "node-1",
+            5
+        );
+
+    expect(
+        caught_up,
+        "Replication succeeds before the retry limit"
+    );
+
+    expect(
+        cluster.node("node-2").last_log_index() == 3,
+        "Node 2 receives all three missing entries"
+    );
+
+    expect(
+        cluster.node("node-3").last_log_index() == 3,
+        "Node 3 receives all three missing entries"
+    );
+
+    expect(
+        cluster.node("node-1").match_index_for("node-2") == 3,
+        "Leader records node 2's confirmed match index"
+    );
+
+    expect(
+        cluster.node("node-1").match_index_for("node-3") == 3,
+        "Leader records node 3's confirmed match index"
+    );
+
+    expect(
+        cluster.node("node-2").log_entries()[2].command ==
+            "COMMAND 3",
+        "Node 2 stores the final replicated command"
+    );
+}
+
+void test_catch_up_stops_at_retry_limit() {
+    InMemoryCluster cluster{
+        three_node_cluster()
+    };
+
+    seed_node_one_log(cluster);
+
+    const auto delivered_vote_requests =
+        cluster.start_election("node-1");
+
+    static_cast<void>(delivered_vote_requests);
+
+    // Two rounds move next_index backward, but are not enough
+    // to send the complete log to the empty followers.
+    const bool caught_up_after_two_rounds =
+        cluster.replicate_until_caught_up(
+            "node-1",
+            2
+        );
+
+    expect(
+        !caught_up_after_two_rounds,
+        "Replication reports failure when retry limit is too small"
+    );
+
+    expect(
+        cluster.node("node-2").last_log_index() == 0,
+        "Follower remains unchanged before a matching prefix is found"
+    );
+
+    // next_index is now one, so one additional round can send
+    // all three entries.
+    const bool caught_up_after_final_round =
+        cluster.replicate_until_caught_up(
+            "node-1",
+            1
+        );
+
+    expect(
+        caught_up_after_final_round,
+        "Replication continues from its previous progress"
+    );
+
+    expect(
+        cluster.node("node-2").last_log_index() == 3,
+        "Follower catches up during the final round"
     );
 }
 

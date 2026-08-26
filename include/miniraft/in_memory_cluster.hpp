@@ -52,6 +52,14 @@ public:
     [[nodiscard]]
     size_t send_heartbeats(const string& leader_node_id);
 
+    // Keep retrying AppendEntries until every follower has the
+    // leader's complete log or the retry limit is reached.
+    [[nodiscard]]
+    bool replicate_until_caught_up(
+        const string& leader_node_id,
+        size_t max_rounds
+    );
+
     // Deliver heartbeats already waiting in the leader's queue.
     [[nodiscard]]
     size_t deliver_append_entries_actions(
@@ -63,6 +71,13 @@ public:
     size_t size() const;
 
 private:
+
+    // Check whether every follower has confirmed the leader's final log index.
+    [[nodiscard]]
+    bool all_followers_caught_up(
+        const RaftCore& leader
+    ) const;
+
     // The simulator owns every Raft node.
     vector<RaftCore> nodes_;
 };

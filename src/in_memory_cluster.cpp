@@ -5,6 +5,7 @@
 namespace miniraft {
 
 using std::invalid_argument;
+using std::logic_error;
 
 InMemoryCluster::InMemoryCluster(
     vector<string> node_ids,
@@ -133,6 +134,47 @@ size_t InMemoryCluster::send_heartbeats(
     );
 }
 
+bool InMemoryCluster::replicate_until_caught_up(
+    const string& leader_node_id,
+    const size_t max_rounds
+) {
+    RaftCore& leader =
+        node(leader_node_id);
+
+    if (leader.role() != NodeRole::leader) {
+        throw logic_error{
+            "Only a leader can replicate log entries"
+        };
+    }
+
+    // No network round is needed when all followers already match.
+    if (all_followers_caught_up(leader)) {
+        return true;
+    }
+
+    for (size_t round = 0; round < max_rounds; ++round) {
+        // queue_heartbeat_actions() creates an individualized
+        // AppendEntries request using each follower's next_index.
+        static_cast<void>(
+            send_heartbeats(leader_node_id)
+        );
+
+        // A response with a newer term may cause this node
+        // to step down while messages are being delivered.
+        if (leader.role() != NodeRole::leader) {
+            return false;
+        }
+
+        if (all_followers_caught_up(leader)) {
+            return true;
+        }
+    }
+
+    // The retry limit prevents a broken or unreachable cluster
+    // from creating an infinite loop.
+    return false;
+}
+
 size_t InMemoryCluster::deliver_append_entries_actions(
     const string& leader_node_id
 ) {
@@ -158,6 +200,29 @@ size_t InMemoryCluster::deliver_append_entries_actions(
     }
 
     return actions.size();
+}
+
+bool InMemoryCluster::all_followers_caught_up(
+    const RaftCore& leader
+) const {
+    const uint64_t leader_last_index =
+        leader.last_log_index();
+
+    for (const RaftCore& current_node : nodes_) {
+        // A leader does not replicate entries to itself.
+        if (current_node.node_id() == leader.node_id()) {
+            continue;
+        }
+
+        if (
+            leader.match_index_for(current_node.node_id()) <
+            leader_last_index
+        ) {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 size_t InMemoryCluster::size() const {
