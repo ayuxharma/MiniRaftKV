@@ -8,6 +8,7 @@
 #include <string_view>
 #include <unordered_set>
 #include <vector>
+#include <unordered_map>
 
 namespace miniraft {
 
@@ -19,6 +20,7 @@ using std::string_view;
 using std::uint64_t;
 using std::unordered_set;
 using std::vector;
+using std::unordered_map;
 
 // Readable alias for a value that may be absent.
 template <typename ValueType>
@@ -137,6 +139,9 @@ public:
 
     [[nodiscard]] uint64_t last_log_index() const;
     [[nodiscard]] uint64_t last_log_term() const;
+    [[nodiscard]] uint64_t append_command(const string& command) ;
+    [[nodiscard]] uint64_t next_index_for(const string& follower_id) const ;
+    [[nodiscard]] uint64_t match_index_for(const string& follower_id) const ;
 
     // Election-timer accessors.
     [[nodiscard]] uint64_t current_time_ms() const;
@@ -216,6 +221,15 @@ private:
     // Create one vote-request action for every other node.
     void queue_request_vote_actions();
 
+    // Initialize next_index and match_index after winning an election.
+    void initialize_leader_replication_state();
+
+    // Build an individualized AppendEntries request for one follower.
+    [[nodiscard]]
+        AppendEntriesRequest make_append_entries_request(
+            const string& follower_id
+    ) const;
+
     // Calculate the number of votes required to win.
     [[nodiscard]] size_t majority_size() const;
 
@@ -278,6 +292,12 @@ private:
 
     // AppendEntries heartbeats waiting for delivery.
     vector<AppendEntriesAction> pending_append_entries_actions_;
+
+    // Next logical log index to send to each follower.
+    unordered_map<string, uint64_t> next_index_;
+
+    // Highest replicated log index confirmed on each follower.
+    unordered_map<string, uint64_t> match_index_;
 };
 
 }  // namespace miniraft

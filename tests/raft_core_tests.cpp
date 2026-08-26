@@ -2474,6 +2474,550 @@ void test_matched_index_covers_only_request_history() {
     );
 }
 
+void test_leader_initializes_replication_state() {
+    const vector<LogEntry> initial_log{
+        LogEntry{1, "UPDATE notes.txt VERSION 1"},
+        LogEntry{2, "UPDATE notes.txt VERSION 2"}
+    };
+
+    RaftCore leader{
+        "node-1",
+        three_node_cluster(),
+        2,
+        initial_log,
+        100,
+        100,
+        1
+    };
+
+    leader.start_election();
+
+    leader.receive_vote(
+        "node-2",
+        RequestVoteResponse{
+            3,
+            true
+        }
+    );
+
+    expect(
+        leader.role() == NodeRole::leader,
+        "Candidate becomes leader before replication initialization"
+    );
+
+    expect(
+        leader.next_index_for("node-2") == 3,
+        "Node 2 next index starts after the leader log"
+    );
+
+    expect(
+        leader.next_index_for("node-3") == 3,
+        "Node 3 next index starts after the leader log"
+    );
+
+    expect(
+        leader.match_index_for("node-2") == 0,
+        "Node 2 starts with no confirmed matched entry"
+    );
+
+    expect(
+        leader.match_index_for("node-3") == 0,
+        "Node 3 starts with no confirmed matched entry"
+    );
+}
+
+void test_only_leader_can_append_command() {
+    RaftCore follower{
+        "node-1",
+        three_node_cluster()
+    };
+
+    bool exception_was_thrown = false;
+
+    try {
+        static_cast<void>(
+            follower.append_command(
+                "UPDATE notes.txt VERSION 1"
+            )
+        );
+    } catch (const logic_error&) {
+        exception_was_thrown = true;
+    }
+
+    expect(
+        exception_was_thrown,
+        "Follower cannot append a client command"
+    );
+
+    expect(
+        follower.log_entries().empty(),
+        "Rejected follower command does not modify the log"
+    );
+}
+
+void test_leader_appends_current_term_command() {
+    RaftCore leader{
+        "node-1",
+        three_node_cluster()
+    };
+
+    leader.start_election();
+
+    leader.receive_vote(
+        "node-2",
+        RequestVoteResponse{
+            1,
+            true
+        }
+    );
+
+    const auto new_log_index =
+        leader.append_command(
+            "UPDATE notes.txt VERSION 1"
+        );
+
+    expect(
+        new_log_index == 1,
+        "First leader command receives logical index one"
+    );
+
+    expect(
+        leader.log_entries().size() == 1,
+        "Leader stores the new command locally"
+    );
+
+    expect(
+        leader.log_entries()[0].term == 1,
+        "New entry uses the leader's current term"
+    );
+
+    expect(
+        leader.log_entries()[0].command ==
+            "UPDATE notes.txt VERSION 1",
+        "New log entry stores the client command"
+    );
+
+    expect(
+        leader.pending_append_entries_count() == 2,
+        "Appending a command queues replication for both followers"
+    );
+}
+
+void test_leader_rejects_empty_command() {
+    const vector<string> members{
+        "node-1"
+    };
+
+    RaftCore leader{
+        "node-1",
+        members
+    };
+
+    leader.start_election();
+
+    bool exception_was_thrown = false;
+
+    try {
+        static_cast<void>(
+            leader.append_command("")
+        );
+    } catch (const invalid_argument&) {
+        exception_was_thrown = true;
+    }
+
+    expect(
+        exception_was_thrown,
+        "Leader rejects an empty client command"
+    );
+
+    expect(
+        leader.log_entries().empty(),
+        "Rejected empty command does not modify the log"
+    );
+}
+
+void test_appended_command_is_sent_to_followers() {
+    RaftCore leader{
+        "node-1",
+        three_node_cluster()
+    };
+
+    leader.start_election();
+
+    leader.receive_vote(
+        "node-2",
+        RequestVoteResponse{
+            1,
+            true
+        }
+    );
+
+    const auto new_log_index =
+        leader.append_command(
+            "UPDATE notes.txt VERSION 1"
+        );
+
+    static_cast<void>(new_log_index);
+
+    const vector<AppendEntriesAction> actions =
+        leader.take_append_entries_actions();
+
+    bool node_2_received_entry = false;
+    bool node_3_received_entry = false;
+    bool every_request_starts_at_zero = true;
+
+    for (const AppendEntriesAction& action : actions) {
+        if (
+            action.request.prev_log_index != 0 ||
+            action.request.prev_log_term != 0
+        ) {
+            every_request_starts_at_zero = false;
+        }
+
+        if (
+            action.request.entries.size() != 1 ||
+            action.request.entries[0].command !=
+                "UPDATE notes.txt VERSION 1"
+        ) {
+            continue;
+        }
+
+        if (action.target_node_id == "node-2") {
+            node_2_received_entry = true;
+        }
+
+        if (action.target_node_id == "node-3") {
+            node_3_received_entry = true;
+        }
+    }
+
+    expect(
+        actions.size() == 2,
+        "Leader creates one replication action per follower"
+    );
+
+    expect(
+        every_request_starts_at_zero,
+        "First replication request follows the empty log position"
+    );
+
+    expect(
+        node_2_received_entry,
+        "Node 2 receives the appended command"
+    );
+
+    expect(
+        node_3_received_entry,
+        "Node 3 receives the appended command"
+    );
+}
+
+void test_failed_response_moves_next_index_backward() {
+    const vector<LogEntry> initial_log{
+        LogEntry{1, "COMMAND 1"},
+        LogEntry{2, "COMMAND 2"},
+        LogEntry{3, "COMMAND 3"}
+    };
+
+    RaftCore leader{
+        "node-1",
+        three_node_cluster(),
+        3,
+        initial_log
+    };
+
+    leader.start_election();
+
+    leader.receive_vote(
+        "node-2",
+        RequestVoteResponse{
+            4,
+            true
+        }
+    );
+
+    expect(
+        leader.next_index_for("node-3") == 4,
+        "Follower initially starts after leader's third entry"
+    );
+
+    const AppendEntriesResponse failed_response{
+        4,
+        false,
+        0
+    };
+
+    leader.receive_append_entries_response(
+        "node-3",
+        failed_response
+    );
+
+    expect(
+        leader.next_index_for("node-3") == 3,
+        "First rejection moves next index backward"
+    );
+
+    leader.receive_append_entries_response(
+        "node-3",
+        failed_response
+    );
+
+    expect(
+        leader.next_index_for("node-3") == 2,
+        "Second rejection moves next index backward again"
+    );
+
+    leader.receive_append_entries_response(
+        "node-3",
+        failed_response
+    );
+
+    leader.receive_append_entries_response(
+        "node-3",
+        failed_response
+    );
+
+    expect(
+        leader.next_index_for("node-3") == 1,
+        "Next index never moves below one"
+    );
+
+    expect(
+        leader.match_index_for("node-3") == 0,
+        "Rejected requests do not change match index"
+    );
+}
+
+void test_successful_response_updates_replication_progress() {
+    const vector<LogEntry> initial_log{
+        LogEntry{1, "COMMAND 1"},
+        LogEntry{2, "COMMAND 2"},
+        LogEntry{3, "COMMAND 3"}
+    };
+
+    RaftCore leader{
+        "node-1",
+        three_node_cluster(),
+        3,
+        initial_log
+    };
+
+    leader.start_election();
+
+    leader.receive_vote(
+        "node-2",
+        RequestVoteResponse{
+            4,
+            true
+        }
+    );
+
+    // Simulate backtracking until the leader sends the full log.
+    const AppendEntriesResponse failed_response{
+        4,
+        false,
+        0
+    };
+
+    leader.receive_append_entries_response(
+        "node-3",
+        failed_response
+    );
+
+    leader.receive_append_entries_response(
+        "node-3",
+        failed_response
+    );
+
+    leader.receive_append_entries_response(
+        "node-3",
+        failed_response
+    );
+
+    const AppendEntriesResponse successful_response{
+        4,
+        true,
+        3
+    };
+
+    leader.receive_append_entries_response(
+        "node-3",
+        successful_response
+    );
+
+    expect(
+        leader.match_index_for("node-3") == 3,
+        "Successful response updates follower match index"
+    );
+
+    expect(
+        leader.next_index_for("node-3") == 4,
+        "Successful response moves next index after matched entry"
+    );
+}
+
+void test_delayed_success_does_not_reverse_progress() {
+    const vector<LogEntry> initial_log{
+        LogEntry{1, "COMMAND 1"},
+        LogEntry{2, "COMMAND 2"},
+        LogEntry{3, "COMMAND 3"}
+    };
+
+    RaftCore leader{
+        "node-1",
+        three_node_cluster(),
+        3,
+        initial_log
+    };
+
+    leader.start_election();
+
+    leader.receive_vote(
+        "node-2",
+        RequestVoteResponse{
+            4,
+            true
+        }
+    );
+
+    leader.receive_append_entries_response(
+        "node-3",
+        AppendEntriesResponse{
+            4,
+            true,
+            3
+        }
+    );
+
+    // This response represents an older request arriving late.
+    leader.receive_append_entries_response(
+        "node-3",
+        AppendEntriesResponse{
+            4,
+            true,
+            1
+        }
+    );
+
+    expect(
+        leader.match_index_for("node-3") == 3,
+        "Delayed response does not reduce match index"
+    );
+
+    expect(
+        leader.next_index_for("node-3") == 4,
+        "Delayed response does not reduce next index"
+    );
+}
+
+void test_followers_receive_individualized_requests() {
+    const vector<LogEntry> initial_log{
+        LogEntry{1, "COMMAND 1"},
+        LogEntry{2, "COMMAND 2"},
+        LogEntry{3, "COMMAND 3"}
+    };
+
+    RaftCore leader{
+        "node-1",
+        three_node_cluster(),
+        3,
+        initial_log
+    };
+
+    leader.start_election();
+
+    leader.receive_vote(
+        "node-2",
+        RequestVoteResponse{
+            4,
+            true
+        }
+    );
+
+    // Node 3 rejects once, but node 2 remains fully caught up.
+    leader.receive_append_entries_response(
+        "node-3",
+        AppendEntriesResponse{
+            4,
+            false,
+            0
+        }
+    );
+
+    leader.queue_heartbeat_actions();
+
+    const vector<AppendEntriesAction> actions =
+        leader.take_append_entries_actions();
+
+    bool node_2_received_empty_heartbeat = false;
+    bool node_3_received_entry_3 = false;
+
+    for (const AppendEntriesAction& action : actions) {
+        if (action.target_node_id == "node-2") {
+            node_2_received_empty_heartbeat =
+                action.request.prev_log_index == 3 &&
+                action.request.prev_log_term == 3 &&
+                action.request.entries.empty();
+        }
+
+        if (action.target_node_id == "node-3") {
+            node_3_received_entry_3 =
+                action.request.prev_log_index == 2 &&
+                action.request.prev_log_term == 2 &&
+                action.request.entries.size() == 1 &&
+                action.request.entries[0].term == 3 &&
+                action.request.entries[0].command ==
+                    "COMMAND 3";
+        }
+    }
+
+    expect(
+        node_2_received_empty_heartbeat,
+        "Caught-up follower receives an empty heartbeat"
+    );
+
+    expect(
+        node_3_received_entry_3,
+        "Behind follower receives its missing log suffix"
+    );
+}
+
+void test_replication_state_is_leader_only() {
+    RaftCore node{
+        "node-1",
+        three_node_cluster()
+    };
+
+    bool next_index_was_rejected = false;
+    bool match_index_was_rejected = false;
+
+    try {
+        static_cast<void>(
+            node.next_index_for("node-2")
+        );
+    } catch (const logic_error&) {
+        next_index_was_rejected = true;
+    }
+
+    try {
+        static_cast<void>(
+            node.match_index_for("node-2")
+        );
+    } catch (const logic_error&) {
+        match_index_was_rejected = true;
+    }
+
+    expect(
+        next_index_was_rejected,
+        "Follower cannot read leader next index"
+    );
+
+    expect(
+        match_index_was_rejected,
+        "Follower cannot read leader match index"
+    );
+}
+
 }  // namespace
 
 int main() {
@@ -2555,6 +3099,18 @@ test_follower_removes_conflicting_suffix();
 test_previous_log_mismatch_preserves_log();
 test_invalid_entry_batch_is_atomic();
 test_matched_index_covers_only_request_history();
+
+// Leader-side replication progress.
+test_leader_initializes_replication_state();
+test_only_leader_can_append_command();
+test_leader_appends_current_term_command();
+test_leader_rejects_empty_command();
+test_appended_command_is_sent_to_followers();
+test_failed_response_moves_next_index_backward();
+test_successful_response_updates_replication_progress();
+test_delayed_success_does_not_reverse_progress();
+test_followers_receive_individualized_requests();
+test_replication_state_is_leader_only();
 
     if (failure_count == 0) {
         cout << "\nAll Raft core tests passed.\n";

@@ -184,6 +184,48 @@ uint64_t RaftCore::last_log_term() const {
     return log_entries_.back().term;
 }
 
+uint64_t RaftCore::next_index_for(
+    const string& follower_id
+) const {
+    if (role_ != NodeRole::leader) {
+        throw logic_error{
+            "Only a leader has next_index values"
+        };
+    }
+
+    const auto iterator =
+        next_index_.find(follower_id);
+
+    if (iterator == next_index_.end()) {
+        throw invalid_argument{
+            "next_index requested for unknown follower"
+        };
+    }
+
+    return iterator->second;
+}
+
+uint64_t RaftCore::match_index_for(
+    const string& follower_id
+) const {
+    if (role_ != NodeRole::leader) {
+        throw logic_error{
+            "Only a leader has match_index values"
+        };
+    }
+
+    const auto iterator =
+        match_index_.find(follower_id);
+
+    if (iterator == match_index_.end()) {
+        throw invalid_argument{
+            "match_index requested for unknown follower"
+        };
+    }
+
+    return iterator->second;
+}
+
 uint64_t RaftCore::current_time_ms() const {
     return current_time_ms_;
 }
@@ -296,6 +338,28 @@ void RaftCore::queue_request_vote_actions() {
     }
 }
 
+void RaftCore::initialize_leader_replication_state() {
+    next_index_.clear();
+    match_index_.clear();
+
+    // A newly elected leader initially assumes that every follower
+    // already contains the leader's complete log.
+    const uint64_t initial_next_index =
+        last_log_index() + 1;
+
+    for (const string& member_id : cluster_members_) {
+        if (member_id == node_id_) {
+            continue;
+        }
+
+        next_index_[member_id] =
+            initial_next_index;
+
+        // No follower entry has been confirmed in this term yet.
+        match_index_[member_id] = 0;
+    }
+}
+
 void RaftCore::start_election() {
     // Every election starts in a newer term.
     ++current_term_;
@@ -305,6 +369,10 @@ void RaftCore::start_election() {
     leader_id_.reset() ;
 
     pending_append_entries_actions_.clear() ;
+
+    // Candidate state must not retain old leader replication progress.
+    next_index_.clear();
+    match_index_.clear();
 
     // Remove votes from the previous election.
     votes_received_.clear();
@@ -327,6 +395,8 @@ void RaftCore::start_election() {
 
         // No vote requests are needed after becoming leader.
         pending_request_vote_actions_.clear();
+
+        initialize_leader_replication_state();
 
         queue_heartbeat_actions() ;
     }
@@ -369,31 +439,124 @@ RaftCore::make_heartbeat_request() const {
     return request;
 }
 
-void RaftCore::queue_heartbeat_actions() {
-    // Only the elected leader may create heartbeat actions.
+AppendEntriesRequest
+RaftCore::make_append_entries_request(
+    const string& follower_id
+) const {
     if (role_ != NodeRole::leader) {
         throw logic_error{
-            "Only a leader can queue heartbeat actions"
+            "Only a leader can create AppendEntries requests"
         };
     }
 
-    // Remove any older heartbeat actions that were not delivered.
+    const auto iterator =
+        next_index_.find(follower_id);
+
+    if (iterator == next_index_.end()) {
+        throw invalid_argument{
+            "AppendEntries requested for unknown follower"
+        };
+    }
+
+    const uint64_t follower_next_index =
+        iterator->second;
+
+    AppendEntriesRequest request;
+
+    request.term = current_term_;
+    request.leader_id = node_id_;
+
+    // The entry before next_index must match on both nodes.
+    request.prev_log_index =
+        follower_next_index - 1;
+
+    if (request.prev_log_index == 0) {
+        request.prev_log_term = 0;
+    } else {
+        const size_t previous_vector_index =
+            static_cast<size_t>(
+                request.prev_log_index - 1
+            );
+
+        request.prev_log_term =
+            log_entries_[previous_vector_index].term;
+    }
+
+    // Send every entry the follower may still be missing.
+    for (
+        uint64_t logical_index = follower_next_index;
+        logical_index <= last_log_index();
+        ++logical_index
+    ) {
+        const size_t vector_index =
+            static_cast<size_t>(
+                logical_index - 1
+            );
+
+        request.entries.push_back(
+            log_entries_[vector_index]
+        );
+    }
+
+    // commit_index is not implemented yet.
+    request.leader_commit = 0;
+
+    return request;
+}
+
+uint64_t RaftCore::append_command(
+    const string& command
+) {
+    if (role_ != NodeRole::leader) {
+        throw logic_error{
+            "Only a leader can append client commands"
+        };
+    }
+
+    if (command.empty()) {
+        throw invalid_argument{
+            "A client command cannot be empty"
+        };
+    }
+
+    // The new entry belongs to the leader's current term.
+    log_entries_.push_back(
+        LogEntry{
+            current_term_,
+            command
+        }
+    );
+
+    // Prepare a fresh replication request for every follower.
+    queue_heartbeat_actions();
+
+    return last_log_index();
+}
+
+void RaftCore::queue_heartbeat_actions() {
+    if (role_ != NodeRole::leader) {
+        throw logic_error{
+            "Only a leader can queue AppendEntries actions"
+        };
+    }
+
+    // Replace any undelivered actions with fresh requests.
     pending_append_entries_actions_.clear();
 
-    // Every follower receives the same heartbeat for now.
-    const AppendEntriesRequest heartbeat =
-        make_heartbeat_request();
-
     for (const string& member_id : cluster_members_) {
-        // A leader does not send a heartbeat to itself.
         if (member_id == node_id_) {
             continue;
         }
 
+        // This request may be an empty heartbeat or may contain
+        // entries that this particular follower is missing.
+        const AppendEntriesRequest request =
+            make_append_entries_request(member_id);
+
         pending_append_entries_actions_.push_back(
             AppendEntriesAction{
                 member_id,
-                heartbeat
+                request
             }
         );
     }
@@ -417,37 +580,85 @@ void RaftCore::receive_append_entries_response(
     const string& follower_id,
     const AppendEntriesResponse& response
 ) {
-    // Responses are accepted only from known cluster members.
     if (
         cluster_members_.find(follower_id) ==
-        cluster_members_.end()
+        cluster_members_.end() ||
+        follower_id == node_id_
     ) {
         throw invalid_argument{
-            "Received AppendEntries response from unknown member"
+            "Received AppendEntries response from unknown follower"
         };
     }
 
-    // A newer term proves that this node is no longer the leader.
+    // A newer term proves this node is no longer leader.
     if (response.term > current_term_) {
         become_follower(response.term);
         return;
     }
 
-    // Ignore responses from older terms.
+    // Ignore responses belonging to an older term.
     if (response.term < current_term_) {
         return;
     }
 
-    // Only a leader processes current-term AppendEntries responses.
+    // Only the current leader tracks replication progress.
     if (role_ != NodeRole::leader) {
         return;
     }
 
-    // For heartbeat-only messages, no additional work is required.
-    //
-    // Later, success and failure will update next_index and
-    // match_index during log replication.
-    static_cast<void>(response.success);
+    auto next_iterator =
+        next_index_.find(follower_id);
+
+    auto match_iterator =
+        match_index_.find(follower_id);
+
+    if (
+        next_iterator == next_index_.end() ||
+        match_iterator == match_index_.end()
+    ) {
+        throw logic_error{
+            "Leader replication state is missing a follower"
+        };
+    }
+
+    if (!response.success) {
+        // Move backward one position and retry in a future round.
+        //
+        // Index one is the lowest possible next_index because
+        // logical log entry indexes begin at one.
+        if (next_iterator->second > 1) {
+            --next_iterator->second;
+        }
+
+        return;
+    }
+
+    // A follower cannot confirm an index beyond the leader's log.
+    if (response.matched_index > last_log_index()) {
+        throw invalid_argument{
+            "Follower matched index exceeds leader log"
+        };
+    }
+
+    // Delayed responses must not move replication progress backward.
+    if (
+        response.matched_index >
+        match_iterator->second
+    ) {
+        match_iterator->second =
+            response.matched_index;
+    }
+
+    const uint64_t confirmed_next_index =
+        response.matched_index + 1;
+
+    if (
+        confirmed_next_index >
+        next_iterator->second
+    ) {
+        next_iterator->second =
+            confirmed_next_index;
+    }
 }
 
 bool RaftCore::candidate_log_is_up_to_date(
@@ -592,6 +803,8 @@ RaftCore::handle_append_entries(
         votes_received_.clear();
         pending_request_vote_actions_.clear();
         pending_append_entries_actions_.clear();
+        next_index_.clear();
+        match_index_.clear();
     }
 
     // The term may have changed after becoming a follower.
@@ -706,6 +919,7 @@ void RaftCore::receive_vote(
 
         // Stop sending election requests after becoming leader.
         pending_request_vote_actions_.clear();
+        initialize_leader_replication_state() ;
 
         queue_heartbeat_actions() ;
     }
@@ -732,6 +946,8 @@ void RaftCore::become_follower(
     votes_received_.clear();
     pending_request_vote_actions_.clear();
     pending_append_entries_actions_.clear() ;
+    next_index_.clear();
+    match_index_.clear();
 }
 
 }  // namespace miniraft
