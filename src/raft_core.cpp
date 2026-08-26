@@ -184,6 +184,18 @@ uint64_t RaftCore::last_log_term() const {
     return log_entries_.back().term;
 }
 
+uint64_t RaftCore::commit_index() const {
+    return commit_index_;
+}
+
+uint64_t RaftCore::last_applied() const {
+    return last_applied_;
+}
+
+const vector<string>& RaftCore::applied_commands() const {
+    return applied_commands_;
+}
+
 uint64_t RaftCore::next_index_for(
     const string& follower_id
 ) const {
@@ -360,6 +372,71 @@ void RaftCore::initialize_leader_replication_state() {
     }
 }
 
+void RaftCore::advance_commit_index() {
+    if (role_ != NodeRole::leader) {
+        return;
+    }
+
+    // Search backward so the highest safe index is selected first.
+    for (
+        uint64_t candidate_index = last_log_index();
+        candidate_index > commit_index_;
+        --candidate_index
+    ) {
+        const size_t vector_index =
+            static_cast<size_t>(candidate_index - 1);
+
+        // Raft directly commits only an entry from the leader's
+        // current term. Committing it also commits earlier entries.
+        if (log_entries_[vector_index].term != current_term_) {
+            continue;
+        }
+
+        // The leader always contains its own log entry.
+        size_t replication_count = 1;
+
+        for (const string& member_id : cluster_members_) {
+            if (member_id == node_id_) {
+                continue;
+            }
+
+            const auto iterator =
+                match_index_.find(member_id);
+
+            if (iterator == match_index_.end()) {
+                throw logic_error{
+                    "Leader commit calculation is missing a follower"
+                };
+            }
+
+            if (iterator->second >= candidate_index) {
+                ++replication_count;
+            }
+        }
+
+        if (replication_count >= majority_size()) {
+            commit_index_ = candidate_index;
+            apply_committed_entries();
+            return;
+        }
+    }
+}
+
+void RaftCore::apply_committed_entries() {
+    while (last_applied_ < commit_index_) {
+        // last_applied_ is also the zero-based vector position of
+        // the next logical log entry that must be applied.
+        const size_t vector_index =
+            static_cast<size_t>(last_applied_);
+
+        applied_commands_.push_back(
+            log_entries_[vector_index].command
+        );
+
+        ++last_applied_;
+    }
+}
+
 void RaftCore::start_election() {
     // Every election starts in a newer term.
     ++current_term_;
@@ -435,6 +512,7 @@ RaftCore::make_heartbeat_request() const {
     request.leader_id = node_id_;
     request.prev_log_index = last_log_index();
     request.prev_log_term = last_log_term();
+    request.leader_commit = commit_index_;
 
     return request;
 }
@@ -498,8 +576,8 @@ RaftCore::make_append_entries_request(
         );
     }
 
-    // commit_index is not implemented yet.
-    request.leader_commit = 0;
+    // Followers use this value to learn which entries are committed.
+    request.leader_commit = commit_index_;
 
     return request;
 }
@@ -526,6 +604,9 @@ uint64_t RaftCore::append_command(
             command
         }
     );
+
+    // A one-node cluster forms a majority without follower replies.
+    advance_commit_index();
 
     // Prepare a fresh replication request for every follower.
     queue_heartbeat_actions();
@@ -659,6 +740,9 @@ void RaftCore::receive_append_entries_response(
         next_iterator->second =
             confirmed_next_index;
     }
+
+    // The new match_index may have completed a majority.
+    advance_commit_index();
 }
 
 bool RaftCore::candidate_log_is_up_to_date(
@@ -854,6 +938,11 @@ RaftCore::handle_append_entries(
         const LogEntry& incoming_entry = request.entries[incoming_offset] ;
 
         if (existing_entry.term != incoming_entry.term) {
+            // A valid Raft leader can never replace a committed entry.
+            if (logical_index <= commit_index_) {
+                return response;
+            }
+
             log_entries_.resize(vector_index) ;
             break ;
         }
@@ -870,7 +959,19 @@ RaftCore::handle_append_entries(
 
     response.matched_index = request.prev_log_index + static_cast<uint64_t>(request.entries.size()) ;
 
-    static_cast<void> (request.leader_commit) ;
+    if (request.leader_commit > commit_index_) {
+        // A follower may commit only through the history that this
+        // request actually verified and that exists in its local log.
+        const uint64_t highest_safe_index =
+            request.leader_commit < response.matched_index
+                ? request.leader_commit
+                : response.matched_index;
+
+        if (highest_safe_index > commit_index_) {
+            commit_index_ = highest_safe_index;
+            apply_committed_entries();
+        }
+    }
 
     return response ;
 }

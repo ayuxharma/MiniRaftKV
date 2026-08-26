@@ -3018,6 +3018,281 @@ void test_replication_state_is_leader_only() {
     );
 }
 
+void test_new_node_has_no_committed_or_applied_entries() {
+    RaftCore node{
+        "node-1",
+        three_node_cluster()
+    };
+
+    expect(
+        node.commit_index() == 0,
+        "A new node starts with commit index zero"
+    );
+
+    expect(
+        node.last_applied() == 0,
+        "A new node starts with last applied index zero"
+    );
+
+    expect(
+        node.applied_commands().empty(),
+        "A new node has not applied any commands"
+    );
+}
+
+void test_majority_commit_applies_command_once() {
+    RaftCore leader{
+        "node-1",
+        three_node_cluster()
+    };
+
+    leader.start_election();
+    leader.receive_vote(
+        "node-2",
+        RequestVoteResponse{1, true}
+    );
+
+    static_cast<void>(
+        leader.append_command("UPDATE notes.txt VERSION 1")
+    );
+
+    expect(
+        leader.commit_index() == 0,
+        "Leader alone cannot commit in a three-node cluster"
+    );
+
+    leader.receive_append_entries_response(
+        "node-2",
+        AppendEntriesResponse{1, true, 1}
+    );
+
+    expect(
+        leader.commit_index() == 1,
+        "Leader commits after one follower confirms the entry"
+    );
+
+    expect(
+        leader.last_applied() == 1,
+        "Leader applies the newly committed entry"
+    );
+
+    expect(
+        leader.applied_commands().size() == 1 &&
+            leader.applied_commands()[0] ==
+                "UPDATE notes.txt VERSION 1",
+        "Leader applies the committed command in log order"
+    );
+
+    // A repeated response must not apply the same command again.
+    leader.receive_append_entries_response(
+        "node-2",
+        AppendEntriesResponse{1, true, 1}
+    );
+
+    expect(
+        leader.applied_commands().size() == 1,
+        "Repeated responses do not apply a command twice"
+    );
+}
+
+void test_one_node_leader_commits_immediately() {
+    RaftCore leader{
+        "node-1",
+        vector<string>{"node-1"}
+    };
+
+    leader.start_election();
+
+    static_cast<void>(
+        leader.append_command("ONLY NODE COMMAND")
+    );
+
+    expect(
+        leader.commit_index() == 1,
+        "One-node leader commits its own entry immediately"
+    );
+
+    expect(
+        leader.last_applied() == 1 &&
+            leader.applied_commands().size() == 1,
+        "One-node leader immediately applies its committed entry"
+    );
+}
+
+void test_current_term_rule_commits_earlier_entries() {
+    RaftCore leader{
+        "node-1",
+        three_node_cluster(),
+        1,
+        vector<LogEntry>{
+            LogEntry{1, "OLD TERM COMMAND"}
+        }
+    };
+
+    // The election moves this node into term two.
+    leader.start_election();
+    leader.receive_vote(
+        "node-2",
+        RequestVoteResponse{2, true}
+    );
+
+    leader.receive_append_entries_response(
+        "node-2",
+        AppendEntriesResponse{2, true, 1}
+    );
+
+    expect(
+        leader.commit_index() == 0,
+        "Leader does not directly commit an old-term entry"
+    );
+
+    static_cast<void>(
+        leader.append_command("CURRENT TERM COMMAND")
+    );
+
+    leader.receive_append_entries_response(
+        "node-2",
+        AppendEntriesResponse{2, true, 2}
+    );
+
+    expect(
+        leader.commit_index() == 2,
+        "Current-term commitment also commits earlier entries"
+    );
+
+    expect(
+        leader.applied_commands().size() == 2 &&
+            leader.applied_commands()[0] == "OLD TERM COMMAND" &&
+            leader.applied_commands()[1] == "CURRENT TERM COMMAND",
+        "Earlier and current-term commands are applied in order"
+    );
+}
+
+void test_follower_clamps_and_applies_leader_commit() {
+    RaftCore follower{
+        "node-2",
+        three_node_cluster()
+    };
+
+    const AppendEntriesResponse response =
+        follower.handle_append_entries(
+            AppendEntriesRequest{
+                1,
+                "node-1",
+                0,
+                0,
+                {
+                    LogEntry{1, "COMMAND 1"},
+                    LogEntry{1, "COMMAND 2"}
+                },
+                99
+            }
+        );
+
+    expect(
+        response.success,
+        "Follower accepts the leader's entries"
+    );
+
+    expect(
+        follower.commit_index() == 2,
+        "Follower never commits beyond verified local history"
+    );
+
+    expect(
+        follower.last_applied() == 2 &&
+            follower.applied_commands().size() == 2,
+        "Follower applies every newly committed entry"
+    );
+}
+
+void test_follower_learns_commit_from_later_heartbeat() {
+    RaftCore follower{
+        "node-2",
+        three_node_cluster()
+    };
+
+    static_cast<void>(
+        follower.handle_append_entries(
+            AppendEntriesRequest{
+                1,
+                "node-1",
+                0,
+                0,
+                {LogEntry{1, "COMMAND 1"}},
+                0
+            }
+        )
+    );
+
+    expect(
+        follower.commit_index() == 0,
+        "Replication alone does not commit a follower entry"
+    );
+
+    static_cast<void>(
+        follower.handle_append_entries(
+            AppendEntriesRequest{
+                1,
+                "node-1",
+                1,
+                1,
+                {},
+                1
+            }
+        )
+    );
+
+    expect(
+        follower.commit_index() == 1 &&
+            follower.last_applied() == 1,
+        "Follower learns and applies commit from a heartbeat"
+    );
+}
+
+void test_committed_entry_cannot_be_replaced() {
+    RaftCore follower{
+        "node-2",
+        three_node_cluster()
+    };
+
+    static_cast<void>(
+        follower.handle_append_entries(
+            AppendEntriesRequest{
+                1,
+                "node-1",
+                0,
+                0,
+                {LogEntry{1, "COMMITTED COMMAND"}},
+                1
+            }
+        )
+    );
+
+    const AppendEntriesResponse response =
+        follower.handle_append_entries(
+            AppendEntriesRequest{
+                2,
+                "node-3",
+                0,
+                0,
+                {LogEntry{2, "CONFLICTING COMMAND"}},
+                0
+            }
+        );
+
+    expect(
+        !response.success,
+        "Follower rejects replacement of a committed entry"
+    );
+
+    expect(
+        follower.log_entries()[0].command == "COMMITTED COMMAND" &&
+            follower.applied_commands().size() == 1,
+        "Committed and applied history remains unchanged"
+    );
+}
+
 }  // namespace
 
 int main() {
@@ -3111,6 +3386,15 @@ test_successful_response_updates_replication_progress();
 test_delayed_success_does_not_reverse_progress();
 test_followers_receive_individualized_requests();
 test_replication_state_is_leader_only();
+
+// Commit propagation and exactly-once application.
+test_new_node_has_no_committed_or_applied_entries();
+test_majority_commit_applies_command_once();
+test_one_node_leader_commits_immediately();
+test_current_term_rule_commits_earlier_entries();
+test_follower_clamps_and_applies_leader_commit();
+test_follower_learns_commit_from_later_heartbeat();
+test_committed_entry_cannot_be_replaced();
 
     if (failure_count == 0) {
         cout << "\nAll Raft core tests passed.\n";

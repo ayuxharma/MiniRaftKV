@@ -501,6 +501,57 @@ void test_catch_up_stops_at_retry_limit() {
     );
 }
 
+void test_committed_command_reaches_all_state_machines() {
+    InMemoryCluster cluster{
+        three_node_cluster()
+    };
+
+    static_cast<void>(
+        cluster.start_election("node-1")
+    );
+
+    static_cast<void>(
+        cluster.node("node-1").append_command(
+            "UPDATE notes.txt VERSION 1"
+        )
+    );
+
+    const bool caught_up =
+        cluster.replicate_until_caught_up(
+            "node-1",
+            5
+        );
+
+    expect(
+        caught_up,
+        "Leader replicates the command to every follower"
+    );
+
+    expect(
+        cluster.node("node-1").commit_index() == 1,
+        "Leader commits the command after majority replication"
+    );
+
+    // Requests were prepared before the leader learned that the
+    // entry was committed. The next heartbeat carries that decision.
+    static_cast<void>(
+        cluster.send_heartbeats("node-1")
+    );
+
+    expect(
+        cluster.node("node-2").commit_index() == 1 &&
+            cluster.node("node-3").commit_index() == 1,
+        "Heartbeat propagates the commit index to both followers"
+    );
+
+    expect(
+        cluster.node("node-1").applied_commands().size() == 1 &&
+            cluster.node("node-2").applied_commands().size() == 1 &&
+            cluster.node("node-3").applied_commands().size() == 1,
+        "Every node applies the committed command exactly once"
+    );
+}
+
 }  // namespace
 
 int main() {
@@ -513,9 +564,16 @@ int main() {
     test_unknown_node_is_rejected();
 
     // Heartbeat delivery between simulated nodes.
-test_election_delivers_initial_heartbeats();
-test_repeated_heartbeats_reset_follower_timers();
-test_non_leader_cannot_send_heartbeats();
+    test_election_delivers_initial_heartbeats();
+    test_repeated_heartbeats_reset_follower_timers();
+    test_non_leader_cannot_send_heartbeats();
+
+    // Automatic follower log catch-up.
+    test_retries_until_followers_catch_up();
+    test_catch_up_stops_at_retry_limit();
+
+    // Commit propagation and application across the cluster.
+    test_committed_command_reaches_all_state_machines();
 
     if (failure_count == 0) {
         cout << "\nAll in-memory cluster tests passed.\n";

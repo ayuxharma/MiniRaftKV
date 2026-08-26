@@ -139,6 +139,13 @@ public:
 
     [[nodiscard]] uint64_t last_log_index() const;
     [[nodiscard]] uint64_t last_log_term() const;
+    [[nodiscard]] uint64_t commit_index() const;
+    [[nodiscard]] uint64_t last_applied() const;
+
+    // Commands that have been applied in committed-log order.
+    [[nodiscard]]
+    const vector<string>& applied_commands() const;
+
     [[nodiscard]] uint64_t append_command(const string& command) ;
     [[nodiscard]] uint64_t next_index_for(const string& follower_id) const ;
     [[nodiscard]] uint64_t match_index_for(const string& follower_id) const ;
@@ -224,6 +231,12 @@ private:
     // Initialize next_index and match_index after winning an election.
     void initialize_leader_replication_state();
 
+    // Advance the leader's commit index after replication responses.
+    void advance_commit_index();
+
+    // Apply every newly committed command exactly once.
+    void apply_committed_entries();
+
     // Build an individualized AppendEntries request for one follower.
     [[nodiscard]]
         AppendEntriesRequest make_append_entries_request(
@@ -256,6 +269,15 @@ private:
 
     // Ordered local Raft log.
     vector<LogEntry> log_entries_;
+
+    // Highest log index known to be stored safely on a majority.
+    uint64_t commit_index_{0};
+
+    // Highest committed log index already applied locally.
+    uint64_t last_applied_{0};
+
+    // Simple state-machine journal used until file metadata is added.
+    vector<string> applied_commands_;
 
     // Current node role.
     NodeRole role_{NodeRole::follower};
