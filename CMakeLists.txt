@@ -43,6 +43,7 @@ endfunction()
 add_library(miniraft_core
     src/raft_core.cpp
     src/in_memory_cluster.cpp
+    src/metadata_store.cpp
 )
 
 # Allow users of the library to include files from include/miniraft.
@@ -109,6 +110,26 @@ enable_project_warnings(miniraft_cluster_tests)
 add_test(
     NAME miniraft_cluster_tests
     COMMAND miniraft_cluster_tests
+)
+
+# Build the file-metadata state-machine tests.
+add_executable(miniraft_metadata_tests
+    tests/metadata_store_tests.cpp
+)
+
+# Metadata tests use MetadataStore from the main library.
+target_link_libraries(miniraft_metadata_tests
+    PRIVATE
+        miniraft_core
+)
+
+# Apply the project warning configuration.
+enable_project_warnings(miniraft_metadata_tests)
+
+# Register the metadata tests with CTest.
+add_test(
+    NAME miniraft_metadata_tests
+    COMMAND miniraft_metadata_tests
 )
 
 # Keep the original executable smoke test.
