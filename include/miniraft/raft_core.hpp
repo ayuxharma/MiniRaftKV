@@ -1,5 +1,6 @@
 #pragma once
 
+#include "miniraft/metadata_store.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -146,6 +147,18 @@ public:
     [[nodiscard]]
     const vector<string>& applied_commands() const;
 
+        // Read the file metadata produced by committed commands.
+    [[nodiscard]]
+    const MetadataStore& metadata_store() const;
+
+    // Encode and append one metadata update to the Raft log.
+    //
+    // Like append_command(), only the leader may call this.
+    [[nodiscard]]
+    uint64_t append_metadata(
+        const FileMetadata& metadata
+    );
+
     [[nodiscard]] uint64_t append_command(const string& command) ;
     [[nodiscard]] uint64_t next_index_for(const string& follower_id) const ;
     [[nodiscard]] uint64_t match_index_for(const string& follower_id) const ;
@@ -276,8 +289,11 @@ private:
     // Highest committed log index already applied locally.
     uint64_t last_applied_{0};
 
-    // Simple state-machine journal used until file metadata is added.
+    // Journal of every command applied by this node.
     vector<string> applied_commands_;
+
+    // Application state created from committed metadata commands.
+    MetadataStore metadata_store_;
 
     // Current node role.
     NodeRole role_{NodeRole::follower};

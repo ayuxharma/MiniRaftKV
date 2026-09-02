@@ -44,6 +44,7 @@ add_library(miniraft_core
     src/raft_core.cpp
     src/in_memory_cluster.cpp
     src/metadata_store.cpp
+    src/metadata_command.cpp
 )
 
 # Allow users of the library to include files from include/miniraft.

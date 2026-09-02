@@ -11,6 +11,8 @@ using miniraft::InMemoryCluster;
 using miniraft::LogEntry;
 using miniraft::NodeRole;
 
+using miniraft::FileMetadata;
+
 // Standard-library names used in these tests.
 using std::cerr;
 using std::cout;
@@ -552,6 +554,83 @@ void test_committed_command_reaches_all_state_machines() {
     );
 }
 
+void test_metadata_state_converges_on_all_nodes() {
+    InMemoryCluster cluster{
+        three_node_cluster()
+    };
+
+    static_cast<void>(
+        cluster.start_election("node-1")
+    );
+
+    static_cast<void>(
+        cluster.node("node-1").append_metadata(
+            FileMetadata{
+                "notes.txt",
+                1,
+                {
+                    "hash-a",
+                    "hash-b"
+                },
+                false
+            }
+        )
+    );
+
+    const bool caught_up =
+        cluster.replicate_until_caught_up(
+            "node-1",
+            5
+        );
+
+    expect(
+        caught_up,
+        "Metadata command replicates to every follower"
+    );
+
+    // A fresh heartbeat propagates the leader's new commit index.
+    static_cast<void>(
+        cluster.send_heartbeats("node-1")
+    );
+
+    const FileMetadata* leader_metadata =
+        cluster.node("node-1")
+            .metadata_store()
+            .find("notes.txt");
+
+    const FileMetadata* node_2_metadata =
+        cluster.node("node-2")
+            .metadata_store()
+            .find("notes.txt");
+
+    const FileMetadata* node_3_metadata =
+        cluster.node("node-3")
+            .metadata_store()
+            .find("notes.txt");
+
+    expect(
+        leader_metadata != nullptr &&
+            node_2_metadata != nullptr &&
+            node_3_metadata != nullptr,
+        "Every node contains the committed file metadata"
+    );
+
+    expect(
+        leader_metadata != nullptr &&
+            node_2_metadata != nullptr &&
+            node_3_metadata != nullptr &&
+            leader_metadata->version ==
+                node_2_metadata->version &&
+            leader_metadata->version ==
+                node_3_metadata->version &&
+            leader_metadata->block_hashes ==
+                node_2_metadata->block_hashes &&
+            leader_metadata->block_hashes ==
+                node_3_metadata->block_hashes,
+        "All nodes converge on identical metadata state"
+    );
+}
+
 }  // namespace
 
 int main() {
@@ -574,6 +653,9 @@ int main() {
 
     // Commit propagation and application across the cluster.
     test_committed_command_reaches_all_state_machines();
+
+        // Replicated file-metadata state machine.
+    test_metadata_state_converges_on_all_nodes();
 
     if (failure_count == 0) {
         cout << "\nAll in-memory cluster tests passed.\n";

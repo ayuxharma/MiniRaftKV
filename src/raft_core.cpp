@@ -1,4 +1,5 @@
 #include "miniraft/raft_core.hpp"
+#include "miniraft/metadata_command.hpp"
 
 #include <random>
 #include <stdexcept>
@@ -194,6 +195,10 @@ uint64_t RaftCore::last_applied() const {
 
 const vector<string>& RaftCore::applied_commands() const {
     return applied_commands_;
+}
+
+const MetadataStore& RaftCore::metadata_store() const {
+    return metadata_store_;
 }
 
 uint64_t RaftCore::next_index_for(
@@ -424,15 +429,33 @@ void RaftCore::advance_commit_index() {
 
 void RaftCore::apply_committed_entries() {
     while (last_applied_ < commit_index_) {
-        // last_applied_ is also the zero-based vector position of
-        // the next logical log entry that must be applied.
+        // last_applied_ is also the zero-based position of the
+        // next logical Raft entry that must be applied.
         const size_t vector_index =
             static_cast<size_t>(last_applied_);
 
-        applied_commands_.push_back(
-            log_entries_[vector_index].command
-        );
+        const string& command =
+            log_entries_[vector_index].command;
 
+        if (is_metadata_command(command)) {
+            const FileMetadata metadata =
+                decode_metadata_command(command);
+
+            // A version conflict is a deterministic no-op.
+            //
+            // Every Raft node sees the same existing state and the
+            // same command, so every node accepts or rejects it in
+            // exactly the same way.
+            const bool accepted =
+                metadata_store_.apply(metadata);
+
+            static_cast<void>(accepted);
+        }
+
+        // Keep the raw command journal for debugging and revision.
+        applied_commands_.push_back(command);
+
+        // Moving this index prevents applying the same entry twice.
         ++last_applied_;
     }
 }
@@ -580,6 +603,15 @@ RaftCore::make_append_entries_request(
     request.leader_commit = commit_index_;
 
     return request;
+}
+
+uint64_t RaftCore::append_metadata(
+    const FileMetadata& metadata
+) {
+    // Encoding produces the deterministic string stored in the log.
+    return append_command(
+        encode_metadata_command(metadata)
+    );
 }
 
 uint64_t RaftCore::append_command(

@@ -16,6 +16,8 @@ using miniraft::RequestVoteAction;
 using miniraft::RequestVoteRequest;
 using miniraft::RequestVoteResponse;
 
+using miniraft::FileMetadata;
+
 
 // Standard-library names used by the tests.
 using std::logic_error;
@@ -3293,6 +3295,105 @@ void test_committed_entry_cannot_be_replaced() {
     );
 }
 
+void test_committed_metadata_updates_state_machine() {
+    RaftCore leader{
+        "node-1",
+        vector<string>{
+            "node-1"
+        }
+    };
+
+    leader.start_election();
+
+    static_cast<void>(
+        leader.append_metadata(
+            FileMetadata{
+                "notes.txt",
+                1,
+                {
+                    "hash-a",
+                    "hash-b"
+                },
+                false
+            }
+        )
+    );
+
+    // A one-node cluster commits immediately.
+    const FileMetadata* metadata =
+        leader.metadata_store().find(
+            "notes.txt"
+        );
+
+    expect(
+        leader.commit_index() == 1 &&
+            leader.last_applied() == 1,
+        "One-node leader commits and applies metadata"
+    );
+
+    expect(
+        metadata != nullptr &&
+            metadata->version == 1 &&
+            metadata->block_hashes.size() == 2 &&
+            !metadata->deleted,
+        "Committed command updates the metadata state machine"
+    );
+}
+
+void test_uncommitted_metadata_is_not_visible() {
+    RaftCore leader{
+        "node-1",
+        three_node_cluster()
+    };
+
+    leader.start_election();
+
+    leader.receive_vote(
+        "node-2",
+        RequestVoteResponse{
+            1,
+            true
+        }
+    );
+
+    static_cast<void>(
+        leader.append_metadata(
+            FileMetadata{
+                "notes.txt",
+                1,
+                {
+                    "hash-a"
+                },
+                false
+            }
+        )
+    );
+
+    expect(
+        leader.commit_index() == 0,
+        "Metadata entry remains uncommitted without replication"
+    );
+
+    expect(
+        leader.metadata_store().find("notes.txt") == nullptr,
+        "Uncommitted metadata is not visible in state machine"
+    );
+
+    leader.receive_append_entries_response(
+        "node-2",
+        AppendEntriesResponse{
+            1,
+            true,
+            1
+        }
+    );
+
+    expect(
+        leader.metadata_store().find("notes.txt") != nullptr,
+        "Metadata becomes visible after majority commitment"
+    );
+}
+
 }  // namespace
 
 int main() {
@@ -3395,6 +3496,10 @@ test_current_term_rule_commits_earlier_entries();
 test_follower_clamps_and_applies_leader_commit();
 test_follower_learns_commit_from_later_heartbeat();
 test_committed_entry_cannot_be_replaced();
+
+// Replicated metadata state machine.
+test_committed_metadata_updates_state_machine();
+test_uncommitted_metadata_is_not_visible();
 
     if (failure_count == 0) {
         cout << "\nAll Raft core tests passed.\n";

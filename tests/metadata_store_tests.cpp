@@ -1,4 +1,5 @@
 #include "miniraft/metadata_store.hpp"
+#include "miniraft/metadata_command.hpp"
 
 #include <iostream>
 #include <stdexcept>
@@ -13,6 +14,10 @@ using std::cout;
 using std::invalid_argument;
 using std::string;
 using std::vector;
+
+using miniraft::decode_metadata_command;
+using miniraft::encode_metadata_command;
+using miniraft::is_metadata_command;
 
 namespace {
 
@@ -484,6 +489,95 @@ void test_same_updates_produce_same_state() {
     );
 }
 
+void test_metadata_command_round_trip() {
+    const FileMetadata original{
+        "notes.txt",
+        2,
+        {
+            "hash-a",
+            "hash-b"
+        },
+        false
+    };
+
+    const string command =
+        encode_metadata_command(original);
+
+    expect(
+        command ==
+            "META|UPSERT|notes.txt|2|hash-a,hash-b",
+        "Metadata update uses the expected command format"
+    );
+
+    expect(
+        is_metadata_command(command),
+        "Encoded metadata is recognized as a metadata command"
+    );
+
+    const FileMetadata decoded =
+        decode_metadata_command(command);
+
+    expect(
+        decoded.filename == original.filename &&
+            decoded.version == original.version &&
+            decoded.block_hashes == original.block_hashes &&
+            decoded.deleted == original.deleted,
+        "Metadata survives encode and decode round trip"
+    );
+}
+
+void test_delete_command_round_trip() {
+    const FileMetadata tombstone{
+        "notes.txt",
+        3,
+        {},
+        true
+    };
+
+    const string command =
+        encode_metadata_command(tombstone);
+
+    expect(
+        command ==
+            "META|DELETE|notes.txt|3|",
+        "Tombstone uses the expected delete command format"
+    );
+
+    const FileMetadata decoded =
+        decode_metadata_command(command);
+
+    expect(
+        decoded.filename == "notes.txt" &&
+            decoded.version == 3 &&
+            decoded.block_hashes.empty() &&
+            decoded.deleted,
+        "Delete command decodes into a tombstone"
+    );
+}
+void test_malformed_metadata_command_is_rejected() {
+    bool exception_was_thrown = false;
+
+    try {
+        static_cast<void>(
+            decode_metadata_command(
+                "META|UNKNOWN|notes.txt|1|"
+            )
+        );
+    } catch (const invalid_argument&) {
+        exception_was_thrown = true;
+    }
+
+    expect(
+        exception_was_thrown,
+        "Unknown metadata operation throws an exception"
+    );
+
+    expect(
+        !is_metadata_command("NORMAL RAFT COMMAND"),
+        "Ordinary Raft command is not treated as metadata"
+    );
+}
+
 }  // namespace
 
 int main() {
@@ -496,6 +590,11 @@ int main() {
     test_deleted_file_can_be_recreated();
     test_invalid_metadata_is_rejected();
     test_same_updates_produce_same_state();
+
+    // Metadata command encoding and decoding.
+    test_metadata_command_round_trip();
+    test_delete_command_round_trip();
+    test_malformed_metadata_command_is_rejected();
 
     if (failure_count == 0) {
         cout << "\nAll metadata store tests passed.\n";
