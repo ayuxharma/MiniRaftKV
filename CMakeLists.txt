@@ -45,6 +45,7 @@ add_library(miniraft_core
     src/in_memory_cluster.cpp
     src/metadata_store.cpp
     src/metadata_command.cpp
+    src/raft_storage.cpp
 )
 
 # Allow users of the library to include files from include/miniraft.
@@ -126,6 +127,26 @@ target_link_libraries(miniraft_metadata_tests
 
 # Apply the project warning configuration.
 enable_project_warnings(miniraft_metadata_tests)
+
+# Build the Raft persistence tests.
+add_executable(miniraft_storage_tests
+    tests/raft_storage_tests.cpp
+)
+
+# Storage tests use the main MiniRaft library.
+target_link_libraries(miniraft_storage_tests
+    PRIVATE
+        miniraft_core
+)
+
+# Apply the normal compiler warnings.
+enable_project_warnings(miniraft_storage_tests)
+
+# Register the persistence tests with CTest.
+add_test(
+    NAME miniraft_storage_tests
+    COMMAND miniraft_storage_tests
+)
 
 # Register the metadata tests with CTest.
 add_test(
