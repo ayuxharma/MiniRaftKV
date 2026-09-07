@@ -1,5 +1,6 @@
 #include "miniraft/raft_core.hpp"
 #include "miniraft/metadata_command.hpp"
+#include "miniraft/raft_storage.hpp"
 
 #include <random>
 #include <stdexcept>
@@ -35,9 +36,11 @@ RaftCore::RaftCore(
     vector<LogEntry> initial_log,
     const uint64_t min_election_timeout_ms,
     const uint64_t max_election_timeout_ms,
-    const uint64_t random_seed
+    const uint64_t random_seed,
+    string storage_path
 )
     : node_id_{std::move(node_id)},
+      storage_path_{std::move(storage_path)},
       log_entries_{std::move(initial_log)},
       current_term_{initial_term},
       min_election_timeout_ms_{min_election_timeout_ms},
@@ -105,6 +108,29 @@ RaftCore::RaftCore(
         };
     }
 
+        // A state file is authoritative when it already exists.
+    //
+    // This may replace the initial term and initial log supplied
+    // through constructor arguments.
+    restore_persistent_state();
+
+    // A persisted vote must still refer to a configured member.
+    if (
+        voted_for_.has_value() &&
+        cluster_members_.find(voted_for_.value()) ==
+            cluster_members_.end()
+    ) {
+        throw invalid_argument{
+            "Persisted vote refers to an unknown cluster member"
+        };
+    }
+
+    if (commit_index_ > last_log_index()) {
+        throw invalid_argument{
+            "Recovered commit index cannot exceed recovered log"
+        };
+    }
+
     // Validate the supplied or recovered log.
     uint64_t previous_entry_term = 0;
 
@@ -136,8 +162,60 @@ RaftCore::RaftCore(
         previous_entry_term = entry.term;
     }
 
-    // Select the initial randomized timeout.
+    apply_committed_entries();
     reset_election_deadline();
+    persist_state();
+}
+
+void RaftCore::restore_persistent_state() {
+    if (storage_path_.empty()) {
+        return;
+    }
+
+    const FileRaftStorage storage{
+        storage_path_
+    };
+
+    // A missing file means this is the node's first startup.
+    if (!storage.exists()) {
+        return;
+    }
+
+    const PersistentRaftState state =
+        storage.load();
+
+    current_term_ = state.current_term;
+    voted_for_ = state.voted_for;
+    log_entries_ = state.log_entries;
+    commit_index_ = state.commit_index;
+
+    // Volatile state is intentionally not restored.
+    role_ = NodeRole::follower;
+    leader_id_.reset();
+    votes_received_.clear();
+    next_index_.clear();
+    match_index_.clear();
+    pending_request_vote_actions_.clear();
+    pending_append_entries_actions_.clear();
+}
+
+void RaftCore::persist_state() const {
+    if (storage_path_.empty()) {
+        return;
+    }
+
+    const FileRaftStorage storage{
+        storage_path_
+    };
+
+    storage.save(
+        PersistentRaftState{
+            current_term_,
+            voted_for_,
+            log_entries_,
+            commit_index_
+        }
+    );
 }
 
 const string& RaftCore::node_id() const {
@@ -422,6 +500,7 @@ void RaftCore::advance_commit_index() {
         if (replication_count >= majority_size()) {
             commit_index_ = candidate_index;
             apply_committed_entries();
+            persist_state();
             return;
         }
     }
@@ -483,6 +562,10 @@ void RaftCore::start_election() {
 
     // Select a fresh timeout.
     reset_election_deadline();
+
+    // Save the newer term and self-vote before asking other nodes
+    // to participate in this election.
+    persist_state();
 
     // Queue requests for every other cluster member.
     queue_request_vote_actions();
@@ -639,6 +722,8 @@ uint64_t RaftCore::append_command(
 
     // A one-node cluster forms a majority without follower replies.
     advance_commit_index();
+
+    persist_state();
 
     // Prepare a fresh replication request for every follower.
     queue_heartbeat_actions();
@@ -877,6 +962,7 @@ RaftCore::handle_request_vote(
     // Record the vote and start a fresh waiting interval.
     voted_for_ = request.candidate_id;
     reset_election_deadline();
+    persist_state();
 
     response.vote_granted = true;
 
@@ -1005,6 +1091,7 @@ RaftCore::handle_append_entries(
         }
     }
 
+    persist_state() ;
     return response ;
 }
 
@@ -1081,6 +1168,8 @@ void RaftCore::become_follower(
     pending_append_entries_actions_.clear() ;
     next_index_.clear();
     match_index_.clear();
+
+    persist_state() ;
 }
 
 }  // namespace miniraft

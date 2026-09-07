@@ -4,6 +4,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <filesystem>
 
 // MiniRaft types used by the tests.
 using miniraft::AppendEntriesAction;
@@ -26,6 +27,8 @@ using std::cout;
 using std::invalid_argument;
 using std::string;
 using std::vector;
+using std::filesystem::remove;
+using std::filesystem::temp_directory_path;
 
 namespace {
 
@@ -51,6 +54,19 @@ vector<string> three_node_cluster() {
         "node-2",
         "node-3"
     };
+}
+
+string recovery_test_path() {
+    return (
+        temp_directory_path() /
+        "miniraft_core_recovery_test.state"
+    ).string();
+}
+
+void remove_recovery_test_file() {
+    static_cast<void>(
+        remove(recovery_test_path())
+    );
 }
 
 void test_node_starts_as_follower() {
@@ -3394,6 +3410,244 @@ void test_uncommitted_metadata_is_not_visible() {
     );
 }
 
+void test_restart_restores_committed_metadata() {
+    remove_recovery_test_file();
+
+    {
+        RaftCore leader{
+            "node-1",
+            vector<string>{
+                "node-1"
+            },
+            0,
+            {},
+            150,
+            300,
+            1,
+            recovery_test_path()
+        };
+
+        leader.start_election();
+
+        static_cast<void>(
+            leader.append_metadata(
+                FileMetadata{
+                    "notes.txt",
+                    1,
+                    {
+                        "hash-a",
+                        "hash-b"
+                    },
+                    false
+                }
+            )
+        );
+
+        expect(
+            leader.commit_index() == 1,
+            "Original node commits metadata before restart"
+        );
+    }
+
+    const RaftCore restarted{
+        "node-1",
+        vector<string>{
+            "node-1"
+        },
+        0,
+        {},
+        150,
+        300,
+        2,
+        recovery_test_path()
+    };
+
+    expect(
+        restarted.role() == NodeRole::follower,
+        "Restarted node always begins as follower"
+    );
+
+    expect(
+        restarted.current_term() == 1,
+        "Restarted node restores its current term"
+    );
+
+    expect(
+        restarted.voted_for().value_or("") == "node-1",
+        "Restarted node restores its recorded vote"
+    );
+
+    expect(
+        restarted.last_log_index() == 1 &&
+            restarted.commit_index() == 1,
+        "Restarted node restores log and commit index"
+    );
+
+    expect(
+        restarted.last_applied() == 1,
+        "Restarted node replays committed log entries"
+    );
+
+    const FileMetadata* metadata =
+        restarted.metadata_store().find(
+            "notes.txt"
+        );
+
+    expect(
+        metadata != nullptr &&
+            metadata->version == 1 &&
+            metadata->block_hashes.size() == 2,
+        "Restart reconstructs committed metadata state"
+    );
+
+    remove_recovery_test_file();
+}
+
+void test_restart_does_not_apply_uncommitted_entry() {
+    remove_recovery_test_file();
+
+    {
+        RaftCore leader{
+            "node-1",
+            three_node_cluster(),
+            0,
+            {},
+            150,
+            300,
+            1,
+            recovery_test_path()
+        };
+
+        leader.start_election();
+
+        leader.receive_vote(
+            "node-2",
+            RequestVoteResponse{
+                1,
+                true
+            }
+        );
+
+        static_cast<void>(
+            leader.append_metadata(
+                FileMetadata{
+                    "notes.txt",
+                    1,
+                    {
+                        "hash-a"
+                    },
+                    false
+                }
+            )
+        );
+
+        expect(
+            leader.last_log_index() == 1 &&
+                leader.commit_index() == 0,
+            "Metadata is logged but not committed before restart"
+        );
+    }
+
+    const RaftCore restarted{
+        "node-1",
+        three_node_cluster(),
+        0,
+        {},
+        150,
+        300,
+        2,
+        recovery_test_path()
+    };
+
+    expect(
+        restarted.last_log_index() == 1,
+        "Restart preserves the uncommitted log entry"
+    );
+
+    expect(
+        restarted.commit_index() == 0 &&
+            restarted.last_applied() == 0,
+        "Restart does not apply an uncommitted entry"
+    );
+
+    expect(
+        restarted.metadata_store().find("notes.txt") == nullptr,
+        "Uncommitted metadata remains invisible after restart"
+    );
+
+    remove_recovery_test_file();
+}
+
+void test_restart_preserves_vote_safety() {
+    remove_recovery_test_file();
+
+    {
+        RaftCore follower{
+            "node-1",
+            three_node_cluster(),
+            0,
+            {},
+            150,
+            300,
+            1,
+            recovery_test_path()
+        };
+
+        const RequestVoteResponse response =
+            follower.handle_request_vote(
+                RequestVoteRequest{
+                    1,
+                    "node-2",
+                    0,
+                    0
+                }
+            );
+
+        expect(
+            response.vote_granted,
+            "Follower grants its first vote before restart"
+        );
+    }
+
+    RaftCore restarted{
+        "node-1",
+        three_node_cluster(),
+        0,
+        {},
+        150,
+        300,
+        2,
+        recovery_test_path()
+    };
+
+    expect(
+        restarted.voted_for().value_or("") == "node-2",
+        "Restarted follower remembers its previous vote"
+    );
+
+    const RequestVoteResponse second_response =
+        restarted.handle_request_vote(
+            RequestVoteRequest{
+                1,
+                "node-3",
+                0,
+                0
+            }
+        );
+
+    expect(
+        !second_response.vote_granted,
+        "Restarted follower cannot vote twice in one term"
+    );
+
+    expect(
+        restarted.voted_for().value_or("") == "node-2",
+        "Rejected second vote preserves the first candidate"
+    );
+
+    remove_recovery_test_file();
+}
+
 }  // namespace
 
 int main() {
@@ -3500,6 +3754,13 @@ test_committed_entry_cannot_be_replaced();
 // Replicated metadata state machine.
 test_committed_metadata_updates_state_machine();
 test_uncommitted_metadata_is_not_visible();
+
+// Automatic persistence and restart recovery.
+test_restart_restores_committed_metadata();
+test_restart_does_not_apply_uncommitted_entry();
+test_restart_preserves_vote_safety();
+
+    remove_recovery_test_file();
 
     if (failure_count == 0) {
         cout << "\nAll Raft core tests passed.\n";

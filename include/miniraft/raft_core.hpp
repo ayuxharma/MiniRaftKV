@@ -119,7 +119,9 @@ public:
         vector<LogEntry> initial_log = {},
         uint64_t min_election_timeout_ms = 150,
         uint64_t max_election_timeout_ms = 300,
-        uint64_t random_seed = 1
+        uint64_t random_seed = 1,
+        // An empty path keeps this node in memory only.
+        string storage_path = {}
     );
 
     // Basic node-state accessors.
@@ -232,6 +234,13 @@ void receive_append_entries_response(
     vector<RequestVoteAction> take_request_vote_actions();
 
 private:
+
+    // Restore term, vote, log, and commit index after a restart.
+    void restore_persistent_state();
+
+    // Save every piece of Raft state that must survive a restart.
+    void persist_state() const;
+
     // Change to follower after discovering a newer term.
     void become_follower(uint64_t new_term);
 
@@ -276,6 +285,9 @@ private:
 
     // Unique ID of this node.
     string node_id_;
+
+    // Empty means that this node uses in-memory state only.
+    string storage_path_;
 
     // Complete static cluster membership.
     unordered_set<string> cluster_members_;
