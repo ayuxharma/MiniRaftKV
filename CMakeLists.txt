@@ -47,6 +47,7 @@ add_library(miniraft_core
     src/metadata_command.cpp
     src/raft_storage.cpp
     src/block_store.cpp
+    src/file_chunker.cpp
 )
 
 # Allow users of the library to include files from include/miniraft.
@@ -152,6 +153,25 @@ add_executable(miniraft_block_store_tests
 target_link_libraries(miniraft_block_store_tests
     PRIVATE
         miniraft_core
+)
+
+# Build the file chunking and reconstruction tests.
+add_executable(miniraft_file_chunker_tests
+    tests/file_chunker_tests.cpp
+)
+
+target_link_libraries(miniraft_file_chunker_tests
+    PRIVATE
+        miniraft_core
+)
+
+enable_project_warnings(
+    miniraft_file_chunker_tests
+)
+
+add_test(
+    NAME miniraft_file_chunker_tests
+    COMMAND miniraft_file_chunker_tests
 )
 
 # Apply the normal compiler warnings.
