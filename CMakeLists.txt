@@ -46,6 +46,7 @@ add_library(miniraft_core
     src/metadata_store.cpp
     src/metadata_command.cpp
     src/raft_storage.cpp
+    src/block_store.cpp
 )
 
 # Allow users of the library to include files from include/miniraft.
@@ -142,6 +143,26 @@ target_link_libraries(miniraft_storage_tests
 # Apply the normal compiler warnings.
 enable_project_warnings(miniraft_storage_tests)
 
+# Build the content-addressed block-store tests.
+add_executable(miniraft_block_store_tests
+    tests/block_store_tests.cpp
+)
+
+# BlockStore belongs to the main MiniRaft library.
+target_link_libraries(miniraft_block_store_tests
+    PRIVATE
+        miniraft_core
+)
+
+# Apply the normal compiler warnings.
+enable_project_warnings(miniraft_block_store_tests)
+
+# Register the test with CTest.
+add_test(
+    NAME miniraft_block_store_tests
+    COMMAND miniraft_block_store_tests
+)
+
 # Register the persistence tests with CTest.
 add_test(
     NAME miniraft_storage_tests
@@ -167,3 +188,4 @@ set_tests_properties(
         PASS_REGULAR_EXPRESSION
         "node-1 started as follower in term 0"
 )
+
