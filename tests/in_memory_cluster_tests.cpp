@@ -654,7 +654,7 @@ int main() {
     // Commit propagation and application across the cluster.
     test_committed_command_reaches_all_state_machines();
 
-        // Replicated file-metadata state machine.
+    // Replicated file-metadata state machine.
     test_metadata_state_converges_on_all_nodes();
 
     if (failure_count == 0) {
