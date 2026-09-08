@@ -48,6 +48,7 @@ add_library(miniraft_core
     src/raft_storage.cpp
     src/block_store.cpp
     src/file_chunker.cpp
+    src/file_service.cpp
 )
 
 # Allow users of the library to include files from include/miniraft.
@@ -172,6 +173,25 @@ enable_project_warnings(
 add_test(
     NAME miniraft_file_chunker_tests
     COMMAND miniraft_file_chunker_tests
+)
+
+# Build the in-process file-service integration test.
+add_executable(miniraft_file_service_tests
+    tests/file_service_tests.cpp
+)
+
+target_link_libraries(miniraft_file_service_tests
+    PRIVATE
+        miniraft_core
+)
+
+enable_project_warnings(
+    miniraft_file_service_tests
+)
+
+add_test(
+    NAME miniraft_file_service_tests
+    COMMAND miniraft_file_service_tests
 )
 
 # Apply the normal compiler warnings.
