@@ -197,6 +197,18 @@ add_test(
 # Apply the normal compiler warnings.
 enable_project_warnings(miniraft_block_store_tests)
 
+# Build a small end-to-end in-memory file demo.
+add_executable(miniraft_demo
+    apps/file_demo.cpp
+)
+
+target_link_libraries(miniraft_demo
+    PRIVATE
+        miniraft_core
+)
+
+enable_project_warnings(miniraft_demo)
+
 # Register the test with CTest.
 add_test(
     NAME miniraft_block_store_tests
