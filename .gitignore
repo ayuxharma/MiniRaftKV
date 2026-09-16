@@ -19,3 +19,6 @@ logs/
 # Temporary files
 *.tmp
 *.swp
+
+# Protocol Buffer and gRPC generated build files
+build/generated/

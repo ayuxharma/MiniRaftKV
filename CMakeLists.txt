@@ -1,7 +1,5 @@
-# This project requires CMake 3.28 or newer.
 cmake_minimum_required(VERSION 3.28)
 
-# Define the project's basic information.
 project(
     MiniRaftKV
     VERSION 0.2.0
@@ -9,16 +7,13 @@ project(
     LANGUAGES CXX
 )
 
-# Require portable C++20 for every target.
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Locate the installed Protocol Buffers and gRPC packages.
 find_package(Protobuf CONFIG REQUIRED)
 find_package(gRPC CONFIG REQUIRED)
 
-# Apply strong compiler warnings to one target.
 function(enable_project_warnings target_name)
     if(MSVC)
         target_compile_options(
@@ -38,43 +33,42 @@ function(enable_project_warnings target_name)
     endif()
 endfunction()
 
-# ---------------------------------------------------------
-# gRPC and Protocol Buffer code generation
-# ---------------------------------------------------------
-
-# Source file containing the Raft network contract.
-set(RAFT_PROTO_FILE
+# Generate C++ and gRPC code from proto/raft.proto.
+set(
+    RAFT_PROTO_FILE
     "${PROJECT_SOURCE_DIR}/proto/raft.proto"
 )
 
-# Keep generated files in the build directory.
-set(RPC_GENERATED_DIR
+set(
+    RPC_GENERATED_DIR
     "${PROJECT_BINARY_DIR}/generated"
 )
 
-file(MAKE_DIRECTORY
+file(
+    MAKE_DIRECTORY
     "${RPC_GENERATED_DIR}"
 )
 
-# Ordinary Protocol Buffer-generated files.
-set(RAFT_PROTO_SOURCE
+set(
+    RAFT_PROTO_SOURCE
     "${RPC_GENERATED_DIR}/raft.pb.cc"
 )
 
-set(RAFT_PROTO_HEADER
+set(
+    RAFT_PROTO_HEADER
     "${RPC_GENERATED_DIR}/raft.pb.h"
 )
 
-# gRPC-generated service files.
-set(RAFT_GRPC_SOURCE
+set(
+    RAFT_GRPC_SOURCE
     "${RPC_GENERATED_DIR}/raft.grpc.pb.cc"
 )
 
-set(RAFT_GRPC_HEADER
+set(
+    RAFT_GRPC_HEADER
     "${RPC_GENERATED_DIR}/raft.grpc.pb.h"
 )
 
-# Generate C++ messages and synchronous gRPC service classes.
 add_custom_command(
     OUTPUT
         "${RAFT_PROTO_SOURCE}"
@@ -101,8 +95,7 @@ add_custom_command(
     VERBATIM
 )
 
-# Compile generated messages and service interfaces as
-# a separate library.
+# Generated Protocol Buffer and gRPC library.
 add_library(miniraft_rpc
     "${RAFT_PROTO_SOURCE}"
     "${RAFT_PROTO_HEADER}"
@@ -110,47 +103,18 @@ add_library(miniraft_rpc
     "${RAFT_GRPC_HEADER}"
 )
 
-# Generated headers such as raft.pb.h will be included
-# from the build/generated directory.
 target_include_directories(miniraft_rpc
     PUBLIC
         "${RPC_GENERATED_DIR}"
 )
 
-# Link the generated library with Protobuf and gRPC.
 target_link_libraries(miniraft_rpc
     PUBLIC
         protobuf::libprotobuf
         gRPC::grpc++
 )
 
-# Test conversion between internal and network messages.
-add_executable(miniraft_rpc_conversion_tests
-    tests/rpc_conversion_tests.cpp
-)
-
-target_link_libraries(miniraft_rpc_conversion_tests
-    PRIVATE
-        miniraft_rpc_adapter
-)
-
-enable_project_warnings(
-    miniraft_rpc_conversion_tests
-)
-
-add_test(
-    NAME miniraft_rpc_conversion_tests
-    COMMAND miniraft_rpc_conversion_tests
-)
-
-# We deliberately do not apply project warnings to
-# machine-generated Protocol Buffer code.
-
-# ---------------------------------------------------------
-# Main MiniRaft library
-# ---------------------------------------------------------
-
-# Build the consensus and file-storage logic as one library.
+# Pure Raft and file-storage logic.
 add_library(miniraft_core
     src/raft_core.cpp
     src/in_memory_cluster.cpp
@@ -162,7 +126,6 @@ add_library(miniraft_core
     src/file_service.cpp
 )
 
-# Allow code to include headers from include/miniraft.
 target_include_directories(miniraft_core
     PUBLIC
         "${PROJECT_SOURCE_DIR}/include"
@@ -170,10 +133,10 @@ target_include_directories(miniraft_core
 
 enable_project_warnings(miniraft_core)
 
-# Keep translation between generated RPC messages and
-# RaftCore structures in a separate adapter library.
+# Networking code surrounding the pure Raft core.
 add_library(miniraft_rpc_adapter
     src/rpc_conversion.cpp
+    src/raft_service.cpp
 )
 
 target_include_directories(miniraft_rpc_adapter
@@ -189,4 +152,127 @@ target_link_libraries(miniraft_rpc_adapter
 
 enable_project_warnings(
     miniraft_rpc_adapter
+)
+
+# Original node executable.
+add_executable(miniraft_node
+    apps/node_main.cpp
+)
+
+target_link_libraries(miniraft_node
+    PRIVATE
+        miniraft_core
+)
+
+enable_project_warnings(miniraft_node)
+
+# In-memory file demonstration.
+add_executable(miniraft_demo
+    apps/file_demo.cpp
+)
+
+target_link_libraries(miniraft_demo
+    PRIVATE
+        miniraft_core
+)
+
+enable_project_warnings(miniraft_demo)
+
+# Enable CTest.
+enable_testing()
+
+# Helper used to avoid repeating the same configuration
+# for every test executable.
+function(
+    add_miniraft_test
+    target_name
+    source_file
+    linked_library
+)
+    add_executable(
+        ${target_name}
+        ${source_file}
+    )
+
+    target_link_libraries(
+        ${target_name}
+        PRIVATE
+            ${linked_library}
+    )
+
+    enable_project_warnings(
+        ${target_name}
+    )
+
+    add_test(
+        NAME ${target_name}
+        COMMAND ${target_name}
+    )
+endfunction()
+
+add_miniraft_test(
+    miniraft_core_tests
+    tests/raft_core_tests.cpp
+    miniraft_core
+)
+
+add_miniraft_test(
+    miniraft_cluster_tests
+    tests/in_memory_cluster_tests.cpp
+    miniraft_core
+)
+
+add_miniraft_test(
+    miniraft_storage_tests
+    tests/raft_storage_tests.cpp
+    miniraft_core
+)
+
+add_miniraft_test(
+    miniraft_metadata_tests
+    tests/metadata_store_tests.cpp
+    miniraft_core
+)
+
+add_miniraft_test(
+    miniraft_block_store_tests
+    tests/block_store_tests.cpp
+    miniraft_core
+)
+
+add_miniraft_test(
+    miniraft_file_chunker_tests
+    tests/file_chunker_tests.cpp
+    miniraft_core
+)
+
+add_miniraft_test(
+    miniraft_file_service_tests
+    tests/file_service_tests.cpp
+    miniraft_core
+)
+
+add_miniraft_test(
+    miniraft_rpc_conversion_tests
+    tests/rpc_conversion_tests.cpp
+    miniraft_rpc_adapter
+)
+
+add_miniraft_test(
+    miniraft_raft_service_tests
+    tests/raft_service_tests.cpp
+    miniraft_rpc_adapter
+)
+
+# Original node startup smoke test.
+add_test(
+    NAME node_starts_as_follower
+    COMMAND miniraft_node node-1
+)
+
+set_tests_properties(
+    node_starts_as_follower
+    PROPERTIES
+        PASS_REGULAR_EXPRESSION
+        "node-1 started as follower in term 0"
 )
