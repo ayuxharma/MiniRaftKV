@@ -124,6 +124,7 @@ add_library(miniraft_core
     src/block_store.cpp
     src/file_chunker.cpp
     src/file_service.cpp
+    src/key_value_store.cpp
 )
 
 target_include_directories(miniraft_core
@@ -262,6 +263,12 @@ add_miniraft_test(
     miniraft_raft_service_tests
     tests/raft_service_tests.cpp
     miniraft_rpc_adapter
+)
+
+add_miniraft_test(
+    miniraft_key_value_store_tests
+    tests/key_value_store_tests.cpp
+    miniraft_core
 )
 
 # Original node startup smoke test.
