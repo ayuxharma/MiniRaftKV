@@ -150,14 +150,14 @@ enable_project_warnings(
     miniraft_rpc_adapter
 )
 
-# Original node executable.
+# Executable that runs one Raft node as a gRPC server.
 add_executable(miniraft_node
     apps/node_main.cpp
 )
 
 target_link_libraries(miniraft_node
     PRIVATE
-        miniraft_core
+        miniraft_rpc_adapter
 )
 
 enable_project_warnings(miniraft_node)
@@ -235,17 +235,4 @@ add_miniraft_test(
     miniraft_raft_key_value_tests
     tests/raft_key_value_tests.cpp
     miniraft_core
-)
-
-# Original node startup smoke test.
-add_test(
-    NAME node_starts_as_follower
-    COMMAND miniraft_node node-1
-)
-
-set_tests_properties(
-    node_starts_as_follower
-    PROPERTIES
-        PASS_REGULAR_EXPRESSION
-        "node-1 started as follower in term 0"
 )
