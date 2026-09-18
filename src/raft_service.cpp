@@ -3,10 +3,13 @@
 #include "miniraft/rpc_conversion.hpp"
 
 #include <mutex>
+#include <stdexcept>
 
 namespace miniraft {
 
 using std::lock_guard;
+using grpc::StatusCode;
+using std::invalid_argument;
 
 RaftServiceImpl::RaftServiceImpl(
     RaftCore& raft_core
@@ -78,6 +81,115 @@ Status RaftServiceImpl::AppendEntries(
         to_rpc(
             internal_response
         );
+
+    return Status::OK;
+}
+
+Status RaftServiceImpl::Set(
+    ServerContext* context,
+    const rpc::SetRequest* request,
+    rpc::SetResponse* response
+) {
+    static_cast<void>(context);
+
+    lock_guard<mutex> lock{
+        raft_mutex_
+    };
+
+    // Clients must send writes to the elected leader.
+    if (raft_core_.role() != NodeRole::leader) {
+        return Status{
+            StatusCode::FAILED_PRECONDITION,
+            "Only the leader accepts client requests"
+        };
+    }
+
+    try {
+        const uint64_t log_index =
+            raft_core_.append_command(
+                make_set_command(
+                    request->key(),
+                    request->value()
+                )
+            );
+
+        response->set_log_index(log_index);
+    } catch (const invalid_argument& error) {
+        return Status{
+            StatusCode::INVALID_ARGUMENT,
+            error.what()
+        };
+    }
+
+    return Status::OK;
+}
+
+Status RaftServiceImpl::Get(
+    ServerContext* context,
+    const rpc::GetRequest* request,
+    rpc::GetResponse* response
+) {
+    static_cast<void>(context);
+
+    lock_guard<mutex> lock{
+        raft_mutex_
+    };
+
+    // Reading from the leader avoids an obviously stale follower read.
+    if (raft_core_.role() != NodeRole::leader) {
+        return Status{
+            StatusCode::FAILED_PRECONDITION,
+            "Only the leader accepts client requests"
+        };
+    }
+
+    const string* value =
+        raft_core_.key_value_store().get(
+            request->key()
+        );
+
+    response->set_found(value != nullptr);
+
+    if (value != nullptr) {
+        response->set_value(*value);
+    }
+
+    return Status::OK;
+}
+
+Status RaftServiceImpl::Delete(
+    ServerContext* context,
+    const rpc::DeleteRequest* request,
+    rpc::DeleteResponse* response
+) {
+    static_cast<void>(context);
+
+    lock_guard<mutex> lock{
+        raft_mutex_
+    };
+
+    if (raft_core_.role() != NodeRole::leader) {
+        return Status{
+            StatusCode::FAILED_PRECONDITION,
+            "Only the leader accepts client requests"
+        };
+    }
+
+    try {
+        const uint64_t log_index =
+            raft_core_.append_command(
+                make_delete_command(
+                    request->key()
+                )
+            );
+
+        response->set_log_index(log_index);
+    } catch (const invalid_argument& error) {
+        return Status{
+            StatusCode::INVALID_ARGUMENT,
+            error.what()
+        };
+    }
 
     return Status::OK;
 }

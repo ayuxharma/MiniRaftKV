@@ -1,22 +1,22 @@
-syntax = "proto3" ;
+syntax = "proto3";
 
-package miniraft.rpc ;
+package miniraft.rpc;
 
 message LogEntry {
-    uint64 term = 1 ;
-    string command = 2 ;
+  uint64 term = 1;
+  string command = 2;
 }
 
 message RequestVoteRequest {
-    uint64 term = 1 ;
-    string candidate_id = 2 ;
-    uint64 last_log_index = 3;
-    uint64 last_log_term = 4;
+  uint64 term = 1;
+  string candidate_id = 2;
+  uint64 last_log_index = 3;
+  uint64 last_log_term = 4;
 }
 
 message RequestVoteResponse {
-    uint64 term = 1 ;
-    bool vote_granted = 2 ;
+  uint64 term = 1;
+  bool vote_granted = 2;
 }
 
 message AppendEntriesRequest {
@@ -34,6 +34,35 @@ message AppendEntriesResponse {
   uint64 matched_index = 3;
 }
 
+// Client request to create or update one value.
+message SetRequest {
+  string key = 1;
+  string value = 2;
+}
+
+message SetResponse {
+  uint64 log_index = 1;
+}
+
+// Client request to read one value.
+message GetRequest {
+  string key = 1;
+}
+
+message GetResponse {
+  bool found = 1;
+  string value = 2;
+}
+
+// Client request to delete one value.
+message DeleteRequest {
+  string key = 1;
+}
+
+message DeleteResponse {
+  uint64 log_index = 1;
+}
+
 // Network interface exposed by every Raft node.
 service RaftService {
   rpc RequestVote(
@@ -47,4 +76,10 @@ service RaftService {
   ) returns (
     AppendEntriesResponse
   );
+
+  rpc Set(SetRequest) returns (SetResponse);
+
+  rpc Get(GetRequest) returns (GetResponse);
+
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
 }

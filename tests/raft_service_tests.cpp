@@ -13,6 +13,7 @@ using miniraft::RaftCore;
 using miniraft::RaftServiceImpl;
 using miniraft::RequestVoteRequest;
 using miniraft::to_rpc;
+using grpc::StatusCode;
 
 using grpc::ServerContext;
 using grpc::Status;
@@ -187,11 +188,141 @@ void test_append_entries_reaches_raft_core() {
     );
 }
 
+void test_client_can_set_get_and_delete() {
+    // A one-node cluster commits every command immediately.
+    RaftCore node{
+        "node-1",
+        {"node-1"}
+    };
+
+    node.start_election();
+
+    RaftServiceImpl service{
+        node
+    };
+
+    // Test SET.
+    ServerContext set_context;
+    rpc::SetRequest set_request;
+    rpc::SetResponse set_response;
+
+    set_request.set_key("project");
+    set_request.set_value("MiniRaftKV");
+
+    const Status set_status =
+        service.Set(
+            &set_context,
+            &set_request,
+            &set_response
+        );
+
+    expect(
+        set_status.ok() &&
+            set_response.log_index() == 1,
+        "Set appends the first client command"
+    );
+
+    // Test GET.
+    ServerContext get_context;
+    rpc::GetRequest get_request;
+    rpc::GetResponse get_response;
+
+    get_request.set_key("project");
+
+    const Status get_status =
+        service.Get(
+            &get_context,
+            &get_request,
+            &get_response
+        );
+
+    expect(
+        get_status.ok() &&
+            get_response.found() &&
+            get_response.value() == "MiniRaftKV",
+        "Get returns the committed value"
+    );
+
+    // Test DELETE.
+    ServerContext delete_context;
+    rpc::DeleteRequest delete_request;
+    rpc::DeleteResponse delete_response;
+
+    delete_request.set_key("project");
+
+    const Status delete_status =
+        service.Delete(
+            &delete_context,
+            &delete_request,
+            &delete_response
+        );
+
+    expect(
+        delete_status.ok() &&
+            delete_response.log_index() == 2,
+        "Delete appends the second client command"
+    );
+
+    // Confirm that the deleted key is gone.
+    ServerContext missing_context;
+    rpc::GetResponse missing_response;
+
+    const Status missing_status =
+        service.Get(
+            &missing_context,
+            &get_request,
+            &missing_response
+        );
+
+    expect(
+        missing_status.ok() &&
+            !missing_response.found(),
+        "Deleted key is no longer found"
+    );
+}
+
+void test_follower_rejects_client_write() {
+    RaftCore follower{
+        "node-1",
+        {
+            "node-1",
+            "node-2",
+            "node-3"
+        }
+    };
+
+    RaftServiceImpl service{
+        follower
+    };
+
+    ServerContext context;
+    rpc::SetRequest request;
+    rpc::SetResponse response;
+
+    request.set_key("project");
+    request.set_value("MiniRaftKV");
+
+    const Status status =
+        service.Set(
+            &context,
+            &request,
+            &response
+        );
+
+    expect(
+        status.error_code() ==
+            StatusCode::FAILED_PRECONDITION,
+        "Follower rejects a client write"
+    );
+}
+
 }  // namespace
 
 int main() {
     test_request_vote_reaches_raft_core();
     test_append_entries_reaches_raft_core();
+    test_client_can_set_get_and_delete();
+    test_follower_rejects_client_write();
 
     if (failure_count == 0) {
         cout

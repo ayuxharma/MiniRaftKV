@@ -34,6 +34,27 @@ public:
         rpc::AppendEntriesResponse* response
     ) override;
 
+    // Append a SET command through the current leader.
+    Status Set(
+        ServerContext* context,
+        const rpc::SetRequest* request,
+        rpc::SetResponse* response
+    ) override;
+
+// Read one committed value from the current leader.
+Status Get(
+    ServerContext* context,
+    const rpc::GetRequest* request,
+    rpc::GetResponse* response
+) override;
+
+// Append a DELETE command through the current leader.
+Status Delete(
+    ServerContext* context,
+    const rpc::DeleteRequest* request,
+    rpc::DeleteResponse* response
+) override;
+
 private:
     RaftCore& raft_core_;
 
