@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.28)
 project(
     MiniRaftKV
     VERSION 0.2.0
-    DESCRIPTION "A small Raft consensus and file storage implementation in C++"
+    DESCRIPTION "A small Raft consensus and replicated key-value store in C++"
     LANGUAGES CXX
 )
 
@@ -114,16 +114,13 @@ target_link_libraries(miniraft_rpc
         gRPC::grpc++
 )
 
-# Pure Raft and file-storage logic.
+# Raft consensus, persistence, and key-value state machine.
 add_library(miniraft_core
     src/raft_core.cpp
     src/in_memory_cluster.cpp
     src/metadata_store.cpp
     src/metadata_command.cpp
     src/raft_storage.cpp
-    src/block_store.cpp
-    src/file_chunker.cpp
-    src/file_service.cpp
     src/key_value_store.cpp
 )
 
@@ -166,18 +163,6 @@ target_link_libraries(miniraft_node
 )
 
 enable_project_warnings(miniraft_node)
-
-# In-memory file demonstration.
-add_executable(miniraft_demo
-    apps/file_demo.cpp
-)
-
-target_link_libraries(miniraft_demo
-    PRIVATE
-        miniraft_core
-)
-
-enable_project_warnings(miniraft_demo)
 
 # Enable CTest.
 enable_testing()
@@ -232,24 +217,6 @@ add_miniraft_test(
 add_miniraft_test(
     miniraft_metadata_tests
     tests/metadata_store_tests.cpp
-    miniraft_core
-)
-
-add_miniraft_test(
-    miniraft_block_store_tests
-    tests/block_store_tests.cpp
-    miniraft_core
-)
-
-add_miniraft_test(
-    miniraft_file_chunker_tests
-    tests/file_chunker_tests.cpp
-    miniraft_core
-)
-
-add_miniraft_test(
-    miniraft_file_service_tests
-    tests/file_service_tests.cpp
     miniraft_core
 )
 
