@@ -17,7 +17,7 @@ using miniraft::RequestVoteAction;
 using miniraft::RequestVoteRequest;
 using miniraft::RequestVoteResponse;
 
-using miniraft::FileMetadata;
+using miniraft::make_set_command;
 
 
 // Standard-library names used by the tests.
@@ -3311,52 +3311,7 @@ void test_committed_entry_cannot_be_replaced() {
     );
 }
 
-void test_committed_metadata_updates_state_machine() {
-    RaftCore leader{
-        "node-1",
-        vector<string>{
-            "node-1"
-        }
-    };
-
-    leader.start_election();
-
-    static_cast<void>(
-        leader.append_metadata(
-            FileMetadata{
-                "notes.txt",
-                1,
-                {
-                    "hash-a",
-                    "hash-b"
-                },
-                false
-            }
-        )
-    );
-
-    // A one-node cluster commits immediately.
-    const FileMetadata* metadata =
-        leader.metadata_store().find(
-            "notes.txt"
-        );
-
-    expect(
-        leader.commit_index() == 1 &&
-            leader.last_applied() == 1,
-        "One-node leader commits and applies metadata"
-    );
-
-    expect(
-        metadata != nullptr &&
-            metadata->version == 1 &&
-            metadata->block_hashes.size() == 2 &&
-            !metadata->deleted,
-        "Committed command updates the metadata state machine"
-    );
-}
-
-void test_uncommitted_metadata_is_not_visible() {
+void test_uncommitted_key_value_is_not_visible() {
     RaftCore leader{
         "node-1",
         three_node_cluster()
@@ -3373,26 +3328,22 @@ void test_uncommitted_metadata_is_not_visible() {
     );
 
     static_cast<void>(
-        leader.append_metadata(
-            FileMetadata{
-                "notes.txt",
-                1,
-                {
-                    "hash-a"
-                },
-                false
-            }
+        leader.append_command(
+            make_set_command(
+                "project",
+                "MiniRaftKV"
+            )
         )
     );
 
     expect(
         leader.commit_index() == 0,
-        "Metadata entry remains uncommitted without replication"
+        "SET entry remains uncommitted without replication"
     );
 
     expect(
-        leader.metadata_store().find("notes.txt") == nullptr,
-        "Uncommitted metadata is not visible in state machine"
+        leader.key_value_store().get("project") == nullptr,
+        "Uncommitted value is not visible in state machine"
     );
 
     leader.receive_append_entries_response(
@@ -3405,102 +3356,9 @@ void test_uncommitted_metadata_is_not_visible() {
     );
 
     expect(
-        leader.metadata_store().find("notes.txt") != nullptr,
-        "Metadata becomes visible after majority commitment"
+        leader.key_value_store().get("project") != nullptr,
+        "Value becomes visible after majority commitment"
     );
-}
-
-void test_restart_restores_committed_metadata() {
-    remove_recovery_test_file();
-
-    {
-        RaftCore leader{
-            "node-1",
-            vector<string>{
-                "node-1"
-            },
-            0,
-            {},
-            150,
-            300,
-            1,
-            recovery_test_path()
-        };
-
-        leader.start_election();
-
-        static_cast<void>(
-            leader.append_metadata(
-                FileMetadata{
-                    "notes.txt",
-                    1,
-                    {
-                        "hash-a",
-                        "hash-b"
-                    },
-                    false
-                }
-            )
-        );
-
-        expect(
-            leader.commit_index() == 1,
-            "Original node commits metadata before restart"
-        );
-    }
-
-    const RaftCore restarted{
-        "node-1",
-        vector<string>{
-            "node-1"
-        },
-        0,
-        {},
-        150,
-        300,
-        2,
-        recovery_test_path()
-    };
-
-    expect(
-        restarted.role() == NodeRole::follower,
-        "Restarted node always begins as follower"
-    );
-
-    expect(
-        restarted.current_term() == 1,
-        "Restarted node restores its current term"
-    );
-
-    expect(
-        restarted.voted_for().value_or("") == "node-1",
-        "Restarted node restores its recorded vote"
-    );
-
-    expect(
-        restarted.last_log_index() == 1 &&
-            restarted.commit_index() == 1,
-        "Restarted node restores log and commit index"
-    );
-
-    expect(
-        restarted.last_applied() == 1,
-        "Restarted node replays committed log entries"
-    );
-
-    const FileMetadata* metadata =
-        restarted.metadata_store().find(
-            "notes.txt"
-        );
-
-    expect(
-        metadata != nullptr &&
-            metadata->version == 1 &&
-            metadata->block_hashes.size() == 2,
-        "Restart reconstructs committed metadata state"
-    );
-
-    remove_recovery_test_file();
 }
 
 void test_restart_does_not_apply_uncommitted_entry() {
@@ -3529,22 +3387,18 @@ void test_restart_does_not_apply_uncommitted_entry() {
         );
 
         static_cast<void>(
-            leader.append_metadata(
-                FileMetadata{
-                    "notes.txt",
-                    1,
-                    {
-                        "hash-a"
-                    },
-                    false
-                }
+            leader.append_command(
+                make_set_command(
+                    "project",
+                    "MiniRaftKV"
+                )
             )
         );
 
         expect(
             leader.last_log_index() == 1 &&
                 leader.commit_index() == 0,
-            "Metadata is logged but not committed before restart"
+            "SET command is logged but not committed before restart"
         );
     }
 
@@ -3571,8 +3425,8 @@ void test_restart_does_not_apply_uncommitted_entry() {
     );
 
     expect(
-        restarted.metadata_store().find("notes.txt") == nullptr,
-        "Uncommitted metadata remains invisible after restart"
+        restarted.key_value_store().get("project") == nullptr,
+        "Uncommitted value remains invisible after restart"
     );
 
     remove_recovery_test_file();
@@ -3751,12 +3605,14 @@ test_follower_clamps_and_applies_leader_commit();
 test_follower_learns_commit_from_later_heartbeat();
 test_committed_entry_cannot_be_replaced();
 
-// Replicated metadata state machine.
-test_committed_metadata_updates_state_machine();
-test_uncommitted_metadata_is_not_visible();
+// Automatic persistence and restart recovery.
+test_restart_does_not_apply_uncommitted_entry();
+test_restart_preserves_vote_safety();
+
+// Replicated key-value state machine.
+test_uncommitted_key_value_is_not_visible();
 
 // Automatic persistence and restart recovery.
-test_restart_restores_committed_metadata();
 test_restart_does_not_apply_uncommitted_entry();
 test_restart_preserves_vote_safety();
 

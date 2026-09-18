@@ -1,7 +1,6 @@
 #pragma once
 
 #include "miniraft/key_value_store.hpp"
-#include "miniraft/metadata_store.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -154,18 +153,6 @@ public:
     [[nodiscard]]
     const KeyValueStore& key_value_store() const;
 
-    // Read the file metadata produced by committed commands.
-    [[nodiscard]]
-    const MetadataStore& metadata_store() const;
-
-    // Encode and append one metadata update to the Raft log.
-    //
-    // Like append_command(), only the leader may call this.
-    [[nodiscard]]
-    uint64_t append_metadata(
-        const FileMetadata& metadata
-    );
-
     [[nodiscard]] uint64_t append_command(const string& command) ;
     [[nodiscard]] uint64_t next_index_for(const string& follower_id) const ;
     [[nodiscard]] uint64_t match_index_for(const string& follower_id) const ;
@@ -311,9 +298,6 @@ private:
 
     // Application state created from committed SET and DELETE commands.
     KeyValueStore key_value_store_;
-
-    // Application state created from committed metadata commands.
-    MetadataStore metadata_store_;
 
     // Current node role.
     NodeRole role_{NodeRole::follower};

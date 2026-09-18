@@ -1,5 +1,4 @@
 #include "miniraft/raft_core.hpp"
-#include "miniraft/metadata_command.hpp"
 #include "miniraft/raft_storage.hpp"
 
 #include <random>
@@ -279,9 +278,6 @@ const KeyValueStore& RaftCore::key_value_store() const {
     return key_value_store_;
 }
 
-const MetadataStore& RaftCore::metadata_store() const {
-    return metadata_store_;
-}
 
 uint64_t RaftCore::next_index_for(
     const string& follower_id
@@ -525,21 +521,6 @@ void RaftCore::apply_committed_entries() {
             key_value_store_.apply(command);
         }
 
-        if (is_metadata_command(command)) {
-            const FileMetadata metadata =
-                decode_metadata_command(command);
-
-            // A version conflict is a deterministic no-op.
-            //
-            // Every Raft node sees the same existing state and the
-            // same command, so every node accepts or rejects it in
-            // exactly the same way.
-            const bool accepted =
-                metadata_store_.apply(metadata);
-
-            static_cast<void>(accepted);
-        }
-
         // Keep the raw command journal for debugging and revision.
         applied_commands_.push_back(command);
 
@@ -695,15 +676,6 @@ RaftCore::make_append_entries_request(
     request.leader_commit = commit_index_;
 
     return request;
-}
-
-uint64_t RaftCore::append_metadata(
-    const FileMetadata& metadata
-) {
-    // Encoding produces the deterministic string stored in the log.
-    return append_command(
-        encode_metadata_command(metadata)
-    );
 }
 
 uint64_t RaftCore::append_command(

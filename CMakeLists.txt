@@ -118,8 +118,6 @@ target_link_libraries(miniraft_rpc
 add_library(miniraft_core
     src/raft_core.cpp
     src/in_memory_cluster.cpp
-    src/metadata_store.cpp
-    src/metadata_command.cpp
     src/raft_storage.cpp
     src/key_value_store.cpp
 )
@@ -211,12 +209,6 @@ add_miniraft_test(
 add_miniraft_test(
     miniraft_storage_tests
     tests/raft_storage_tests.cpp
-    miniraft_core
-)
-
-add_miniraft_test(
-    miniraft_metadata_tests
-    tests/metadata_store_tests.cpp
     miniraft_core
 )
 

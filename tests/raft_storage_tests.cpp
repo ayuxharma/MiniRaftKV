@@ -79,11 +79,11 @@ void test_state_survives_save_and_load() {
         vector<LogEntry>{
             LogEntry{
                 1,
-                "UPDATE notes.txt VERSION 1"
+                "SET project MiniRaftKV"
             },
             LogEntry{
                 3,
-                "META|UPSERT|photo.jpg|1|hash-a,hash-b"
+                "SET language C++"
             }
         },
         1
@@ -123,14 +123,14 @@ void test_state_survives_save_and_load() {
     expect(
         loaded.log_entries[0].term == 1 &&
             loaded.log_entries[0].command ==
-                "UPDATE notes.txt VERSION 1",
+                "SET project MiniRaftKV",
         "First log entry survives save and load"
     );
 
     expect(
         loaded.log_entries[1].term == 3 &&
             loaded.log_entries[1].command ==
-                "META|UPSERT|photo.jpg|1|hash-a,hash-b",
+                "SET language C++",
         "Metadata command survives save and load"
     );
 
