@@ -133,6 +133,7 @@ enable_project_warnings(miniraft_core)
 add_library(miniraft_rpc_adapter
     src/rpc_conversion.cpp
     src/raft_service.cpp
+    src/raft_peer_client.cpp
 )
 
 target_include_directories(miniraft_rpc_adapter
@@ -221,6 +222,12 @@ add_miniraft_test(
 add_miniraft_test(
     miniraft_raft_service_tests
     tests/raft_service_tests.cpp
+    miniraft_rpc_adapter
+)
+
+add_miniraft_test(
+    miniraft_raft_peer_client_tests
+    tests/raft_peer_client_tests.cpp
     miniraft_rpc_adapter
 )
 
