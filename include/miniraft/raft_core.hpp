@@ -1,5 +1,6 @@
 #pragma once
 
+#include "miniraft/key_value_store.hpp"
 #include "miniraft/metadata_store.hpp"
 #include <cstddef>
 #include <cstdint>
@@ -149,7 +150,11 @@ public:
     [[nodiscard]]
     const vector<string>& applied_commands() const;
 
-        // Read the file metadata produced by committed commands.
+    // Read the key-value state produced by committed commands.
+    [[nodiscard]]
+    const KeyValueStore& key_value_store() const;
+
+    // Read the file metadata produced by committed commands.
     [[nodiscard]]
     const MetadataStore& metadata_store() const;
 
@@ -303,6 +308,9 @@ private:
 
     // Journal of every command applied by this node.
     vector<string> applied_commands_;
+
+    // Application state created from committed SET and DELETE commands.
+    KeyValueStore key_value_store_;
 
     // Application state created from committed metadata commands.
     MetadataStore metadata_store_;

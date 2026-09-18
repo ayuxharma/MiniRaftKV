@@ -275,6 +275,10 @@ const vector<string>& RaftCore::applied_commands() const {
     return applied_commands_;
 }
 
+const KeyValueStore& RaftCore::key_value_store() const {
+    return key_value_store_;
+}
+
 const MetadataStore& RaftCore::metadata_store() const {
     return metadata_store_;
 }
@@ -515,6 +519,11 @@ void RaftCore::apply_committed_entries() {
 
         const string& command =
             log_entries_[vector_index].command;
+
+        // Only committed key-value commands may change client data.
+        if (is_key_value_command(command)) {
+            key_value_store_.apply(command);
+        }
 
         if (is_metadata_command(command)) {
             const FileMetadata metadata =

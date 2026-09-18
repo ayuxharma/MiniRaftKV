@@ -271,6 +271,13 @@ add_miniraft_test(
     miniraft_core
 )
 
+# Test the integration between Raft and KeyValueStore.
+add_miniraft_test(
+    miniraft_raft_key_value_tests
+    tests/raft_key_value_tests.cpp
+    miniraft_core
+)
+
 # Original node startup smoke test.
 add_test(
     NAME node_starts_as_follower
