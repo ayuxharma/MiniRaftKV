@@ -63,6 +63,22 @@ message DeleteResponse {
   uint64 log_index = 1;
 }
 
+
+// Empty request because a node already knows its own status.
+message GetStatusRequest {
+}
+
+message GetStatusResponse {
+  string node_id = 1;
+  string role = 2;
+  uint64 current_term = 3;
+  string leader_id = 4;
+  uint64 commit_index = 5;
+  uint64 last_log_index = 6;
+}
+
+
+
 // Network interface exposed by every Raft node.
 service RaftService {
   rpc RequestVote(
@@ -82,4 +98,10 @@ service RaftService {
   rpc Get(GetRequest) returns (GetResponse);
 
   rpc Delete(DeleteRequest) returns (DeleteResponse);
+
+  rpc GetStatus(
+    GetStatusRequest
+  ) returns (
+    GetStatusResponse
+  );
 }

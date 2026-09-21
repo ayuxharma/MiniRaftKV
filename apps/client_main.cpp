@@ -223,12 +223,69 @@ int run_delete(
     return 1;
 }
 
+int run_status() {
+    bool found_reachable_node = false;
+
+    // Status is requested from every node, not only the leader.
+    for (const string& address : cluster_addresses()) {
+        unique_ptr<rpc::RaftService::Stub> stub =
+            make_stub(address);
+
+        ClientContext context;
+        set_deadline(context);
+
+        rpc::GetStatusRequest request;
+        rpc::GetStatusResponse response;
+
+        const Status status =
+            stub->GetStatus(
+                &context,
+                request,
+                &response
+            );
+
+        if (!status.ok()) {
+            cout
+                << address
+                << " | unavailable\n";
+
+            continue;
+        }
+
+        found_reachable_node = true;
+
+        const string leader =
+            response.leader_id().empty()
+                ? "unknown"
+                : response.leader_id();
+
+        cout
+            << address
+            << " | "
+            << response.node_id()
+            << " | "
+            << response.role()
+            << " | term="
+            << response.current_term()
+            << " | leader="
+            << leader
+            << " | commit="
+            << response.commit_index()
+            << " | log="
+            << response.last_log_index()
+            << '\n';
+    }
+
+    return found_reachable_node ? 0 : 1;
+}
+
 void print_usage() {
     cerr
         << "Usage:\n"
         << "  miniraft_client set <key> <value>\n"
         << "  miniraft_client get <key>\n"
-        << "  miniraft_client delete <key>\n";
+        << "  miniraft_client delete <key>\n"
+        << "  miniraft_client status\n";
 }
 
 }  // namespace
@@ -261,6 +318,10 @@ int main(int argc, char* argv[]) {
             argv[2]
         );
     }
+
+    if (operation == "status" && argc == 2) {
+    return run_status();
+}
 
     print_usage();
     return 1;

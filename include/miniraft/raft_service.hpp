@@ -79,6 +79,14 @@ Status Delete(
     rpc::DeleteResponse* response
 ) override;
 
+
+// Return a small status snapshot from any node.
+Status GetStatus(
+    ServerContext* context,
+    const rpc::GetStatusRequest* request,
+    rpc::GetStatusResponse* response
+) override;
+
 private:
     RaftCore& raft_core_;
 

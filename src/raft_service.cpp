@@ -269,4 +269,52 @@ Status RaftServiceImpl::Delete(
     return Status::OK;
 }
 
+Status RaftServiceImpl::GetStatus(
+    ServerContext* context,
+    const rpc::GetStatusRequest* request,
+    rpc::GetStatusResponse* response
+) {
+    // The request contains no fields.
+    static_cast<void>(context);
+    static_cast<void>(request);
+
+    // Read one consistent snapshot while holding the Raft mutex.
+    lock_guard<mutex> lock{
+        raft_mutex_
+    };
+
+    response->set_node_id(
+        raft_core_.node_id()
+    );
+
+    response->set_role(
+        string{
+            to_string(
+                raft_core_.role()
+            )
+        }
+    );
+
+    response->set_current_term(
+        raft_core_.current_term()
+    );
+
+    // leader_id may be absent before a leader is known.
+    if (raft_core_.leader_id().has_value()) {
+        response->set_leader_id(
+            raft_core_.leader_id().value()
+        );
+    }
+
+    response->set_commit_index(
+        raft_core_.commit_index()
+    );
+
+    response->set_last_log_index(
+        raft_core_.last_log_index()
+    );
+
+    return Status::OK;
+}
+
 }  // namespace miniraft

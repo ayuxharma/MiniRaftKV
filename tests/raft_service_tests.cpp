@@ -316,6 +316,69 @@ void test_follower_rejects_client_write() {
     );
 }
 
+void test_status_reports_node_state() {
+    RaftCore node{
+        "node-1",
+        {
+            "node-1",
+            "node-2",
+            "node-3"
+        },
+        2,
+        {
+            LogEntry{
+                2,
+                "SET project MiniRaftKV"
+            }
+        }
+    };
+
+    // This heartbeat supplies a known leader and commits
+    // the existing log entry.
+    static_cast<void>(
+        node.handle_append_entries(
+            AppendEntriesRequest{
+                3,
+                "node-2",
+                1,
+                2,
+                {},
+                1
+            }
+        )
+    );
+
+    RaftServiceImpl service{
+        node
+    };
+
+    ServerContext context;
+    rpc::GetStatusRequest request;
+    rpc::GetStatusResponse response;
+
+    const Status status =
+        service.GetStatus(
+            &context,
+            &request,
+            &response
+        );
+
+    expect(
+        status.ok(),
+        "GetStatus handler returns OK"
+    );
+
+    expect(
+        response.node_id() == "node-1" &&
+            response.role() == "follower" &&
+            response.current_term() == 3 &&
+            response.leader_id() == "node-2" &&
+            response.commit_index() == 1 &&
+            response.last_log_index() == 1,
+        "GetStatus returns the Raft status snapshot"
+    );
+}
+
 }  // namespace
 
 int main() {
@@ -323,7 +386,7 @@ int main() {
     test_append_entries_reaches_raft_core();
     test_client_can_set_get_and_delete();
     test_follower_rejects_client_write();
-
+    test_status_reports_node_state();
     if (failure_count == 0) {
         cout
             << "All Raft service tests passed.\n";
