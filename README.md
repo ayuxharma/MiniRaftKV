@@ -8,9 +8,6 @@ ordered command log, commit commands through majority agreement, recover state
 after restart, and expose the system through gRPC, a CLI, and a small browser
 dashboard.
 
-> This is an educational distributed-systems project, not a production-ready
-> database.
-
 ## Features
 
 - Three-node Raft cluster with follower, candidate, and leader roles
