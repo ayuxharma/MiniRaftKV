@@ -17,6 +17,81 @@ RaftServiceImpl::RaftServiceImpl(
     : raft_core_{raft_core} {
 }
 
+bool RaftServiceImpl::tick(
+    const uint64_t elapsed_ms
+) {
+    lock_guard<mutex> lock{
+        raft_mutex_
+    };
+
+    return raft_core_.tick(elapsed_ms);
+}
+
+NodeRole RaftServiceImpl::current_role() {
+    lock_guard<mutex> lock{
+        raft_mutex_
+    };
+
+    return raft_core_.role();
+}
+
+void RaftServiceImpl::queue_heartbeats_if_leader() {
+    lock_guard<mutex> lock{
+        raft_mutex_
+    };
+
+    // Check and queue while holding the same lock.
+    if (raft_core_.role() == NodeRole::leader) {
+        raft_core_.queue_heartbeat_actions();
+    }
+}
+
+vector<RequestVoteAction>
+RaftServiceImpl::take_request_vote_actions() {
+    lock_guard<mutex> lock{
+        raft_mutex_
+    };
+
+    return raft_core_.take_request_vote_actions();
+}
+
+vector<AppendEntriesAction>
+RaftServiceImpl::take_append_entries_actions() {
+    lock_guard<mutex> lock{
+        raft_mutex_
+    };
+
+    return raft_core_.take_append_entries_actions();
+}
+
+void RaftServiceImpl::receive_vote(
+    const string& voter_id,
+    const RequestVoteResponse& response
+) {
+    lock_guard<mutex> lock{
+        raft_mutex_
+    };
+
+    raft_core_.receive_vote(
+        voter_id,
+        response
+    );
+}
+
+void RaftServiceImpl::receive_append_entries_response(
+    const string& follower_id,
+    const AppendEntriesResponse& response
+) {
+    lock_guard<mutex> lock{
+        raft_mutex_
+    };
+
+    raft_core_.receive_append_entries_response(
+        follower_id,
+        response
+    );
+}
+
 Status RaftServiceImpl::RequestVote(
     ServerContext* context,
     const rpc::RequestVoteRequest* request,

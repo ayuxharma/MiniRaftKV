@@ -20,6 +20,30 @@ public:
         RaftCore& raft_core
     );
 
+    // Thread-safe methods used by the local runtime loop.
+bool tick(uint64_t elapsed_ms);
+
+[[nodiscard]]
+NodeRole current_role();
+
+void queue_heartbeats_if_leader();
+
+[[nodiscard]]
+vector<RequestVoteAction> take_request_vote_actions();
+
+[[nodiscard]]
+vector<AppendEntriesAction> take_append_entries_actions();
+
+void receive_vote(
+    const string& voter_id,
+    const RequestVoteResponse& response
+);
+
+void receive_append_entries_response(
+    const string& follower_id,
+    const AppendEntriesResponse& response
+);
+
     // Handle a vote request received from another node.
     Status RequestVote(
         ServerContext* context,
