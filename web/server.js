@@ -9,7 +9,7 @@ const port = Number(process.env.PORT || 8080);
 const protoPath = path.join(__dirname, "..", "proto", "raft.proto");
 
 // These defaults match the three local Raft nodes used in the project.
-// Environment variables will let Kubernetes provide different addresses later.
+// Environment variables let a container runtime provide different addresses.
 const nodeAddresses = [
   process.env.RAFT_NODE_1 || "127.0.0.1:50051",
   process.env.RAFT_NODE_2 || "127.0.0.1:50052",
@@ -159,7 +159,7 @@ app.delete("/api/kv/:key", async (request, response) => {
   }
 });
 
-// Kubernetes will use this lightweight endpoint in a later step.
+// Container health checks can use this lightweight endpoint.
 app.get("/healthz", (request, response) => {
   response.json({ status: "ok" });
 });

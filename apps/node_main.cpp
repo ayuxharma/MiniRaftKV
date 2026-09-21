@@ -65,7 +65,7 @@ uint64_t random_seed_for(
 
 int main(int argc, char* argv[]) {
     // Example:
-    // ./miniraft_node node-1 127.0.0.1:50051 data/node-1.state \
+    // ./miniraft_node node-1 127.0.0.1:50051 data/node-1.state
     //     127.0.0.1:50051 127.0.0.1:50052 127.0.0.1:50053
     if (argc != 7) {
         cerr

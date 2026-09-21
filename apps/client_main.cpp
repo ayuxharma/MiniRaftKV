@@ -320,8 +320,8 @@ int main(int argc, char* argv[]) {
     }
 
     if (operation == "status" && argc == 2) {
-    return run_status();
-}
+        return run_status();
+    }
 
     print_usage();
     return 1;

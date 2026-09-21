@@ -1,0 +1,18 @@
+# Files that are unnecessary inside Docker's build context.
+.git/
+.github/
+.vscode/
+.idea/
+
+# Local build and runtime output.
+build/
+data/
+demo-data/
+logs/
+
+# Dependencies are installed inside the dashboard image.
+web/node_modules/
+
+# Local editor and operating-system files.
+.DS_Store
+*.swp

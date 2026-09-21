@@ -11,7 +11,14 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-find_package(Protobuf CONFIG REQUIRED)
+# Homebrew provides a Protobuf CMake config, while Ubuntu provides
+# CMake's standard FindProtobuf module. Support both environments.
+find_package(Protobuf CONFIG QUIET)
+
+if(NOT Protobuf_FOUND)
+    find_package(Protobuf REQUIRED)
+endif()
+
 find_package(gRPC CONFIG REQUIRED)
 
 function(enable_project_warnings target_name)
