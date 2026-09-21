@@ -164,6 +164,18 @@ target_link_libraries(miniraft_node
 
 enable_project_warnings(miniraft_node)
 
+# Small command-line client for the local three-node cluster.
+add_executable(miniraft_client
+    apps/client_main.cpp
+)
+
+target_link_libraries(miniraft_client
+    PRIVATE
+        miniraft_rpc
+)
+
+enable_project_warnings(miniraft_client)
+
 # Enable CTest.
 enable_testing()
 
