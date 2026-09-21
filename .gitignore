@@ -23,3 +23,6 @@ logs/
 
 # Protocol Buffer and gRPC generated build files
 build/generated/
+
+# Node.js dependencies used by the dashboard
+web/node_modules/

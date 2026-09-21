@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MiniRaftKV Dashboard</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main>
+      <!-- Short explanation for someone seeing the project for the first time. -->
+      <header>
+        <p class="label">Distributed key-value store</p>
+        <h1>MiniRaftKV</h1>
+        <p>See the Raft leader and try the replicated key-value store.</p>
+      </header>
+
+      <!-- JavaScript fills this table with live data from /api/status. -->
+      <section>
+        <div class="section-title">
+          <h2>Cluster status</h2>
+          <span id="updated">Connecting...</span>
+        </div>
+
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Node</th>
+                <th>Role</th>
+                <th>Term</th>
+                <th>Known leader</th>
+                <th>Commit index</th>
+                <th>Log index</th>
+              </tr>
+            </thead>
+            <tbody id="nodes"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- These controls call the SET, GET, and DELETE HTTP endpoints. -->
+      <section class="operations">
+        <h2>Try the key-value store</h2>
+
+        <div class="fields">
+          <label>
+            Key
+            <input id="key" placeholder="city">
+          </label>
+
+          <label>
+            Value
+            <input id="value" placeholder="Delhi">
+          </label>
+        </div>
+
+        <div class="buttons">
+          <button id="set">Set</button>
+          <button id="get">Get</button>
+          <button id="delete" class="secondary">Delete</button>
+        </div>
+
+        <p id="result">Results will appear here.</p>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
